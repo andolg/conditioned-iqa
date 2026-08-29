@@ -1,0 +1,52 @@
+# Environments
+.venv/
+venv/
+env/
+.python-version
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+
+# Caches
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.ipynb_checkpoints/
+
+# Data and anything downloaded or produced by a run
+data/
+datasets/
+*.csv
+!configs/*.csv
+archives/
+runs/
+results/
+outputs/
+checkpoints/
+*.pt
+*.pth
+*.ckpt
+*.npy
+*.log
+
+# Local experiments: scratch scripts, notebooks, throwaway configs
+scratch*
+tmp*
+notebooks/
+*_local.py
+*_scratch.py
+*.local.yaml
+*.local.json
+
+# Secrets
+.env
+.envrc
+
+# Editors and OS
+.idea/
+.vscode/
+.DS_Store
