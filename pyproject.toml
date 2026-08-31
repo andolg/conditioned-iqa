@@ -7,8 +7,14 @@ dependencies = [
     "torch",
     "transformers>=4.37",
     "pandas",
-    "openpyxl",  # CID2013 ships its labels as xlsx
+    "openpyxl",  # SPAQ and CID2013 ship their labels as xlsx
     "numpy",
     "scipy",
     "pillow",
 ]
+
+# The scripts sit at the repo root rather than in a package, and setuptools
+# refuses to guess which of them to install. Naming them keeps `pip install -e .`
+# working and makes them importable from anywhere.
+[tool.setuptools]
+py-modules = ["dataset", "download_data", "prepare_data", "train"]

@@ -17,19 +17,24 @@ dist/
 .ruff_cache/
 .ipynb_checkpoints/
 
-# Data and anything downloaded or produced by a run
+# Downloaded data and the label tables built from it. `labels.csv` and
+# `all.csv` carry absolute paths from the machine that wrote them, so they are
+# rebuilt rather than shared — `prepare_data.py` regenerates them in seconds.
 data/
 datasets/
-*.csv
-!configs/*.csv
 archives/
-runs/
-results/
-outputs/
-checkpoints/
+labels.csv
+all.csv
+
+# Results are deliverables, not clutter: the manifests, configs, per-split
+# prediction files and metric tables are what makes a run reproducible, so
+# `runs/`, `results/` and `manifests/` are tracked on purpose. Only the
+# weights are excluded by default — attach a checkpoint to a release rather
+# than to a commit, unless it is small enough to be worth versioning.
 *.pt
 *.pth
 *.ckpt
+!runs/**/*.pt
 *.npy
 *.log
 

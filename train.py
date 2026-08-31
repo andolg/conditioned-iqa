@@ -11,9 +11,9 @@ thousand parameters over a representation that costs nothing to keep. That
 makes this the row every other design is measured against: if a change does
 not beat it, the change is not doing anything.
 
-Reports SRCC and PLCC on the held-out split each epoch. SRCC is the number
-IQA papers report — it only cares about ranking, which is what a quality
-metric is for.
+Reports SRCC and PLCC on the held-out split each epoch, one row per dataset
+plus their macro and the worst of them. SRCC is the number IQA papers report
+— it only cares about ranking, which is what a quality metric is for.
 """
 
 from __future__ import annotations
@@ -34,6 +34,8 @@ BACKBONES = {
     "clip-base": ("openai/clip-vit-base-patch16", 224),
     "clip-large": ("openai/clip-vit-large-patch14-336", 336),
     "siglip": ("google/siglip-large-patch16-256", 256),
+    "siglip2-base": ("google/siglip2-base-patch16-224", 224),
+    "siglip2-large": ("google/siglip2-large-patch16-256", 256),
 }
 
 
@@ -71,7 +73,15 @@ def embed(backbone, images: torch.Tensor) -> torch.Tensor:
 
 
 def evaluate(backbone, head, loader, device) -> dict:
-    """SRCC and PLCC over the split, and SRCC computed within each reference.
+    """SRCC and PLCC per dataset, their macro, and SRCC within each reference.
+
+    Per dataset rather than pooled, because pooling measures something else.
+    Two releases put their subjects on different scales and score different
+    pictures, so a correlation over the union partly measures the offset
+    between them: on a KADID + KonIQ + SPAQ run the pooled SRCC came out at
+    0.766, below every one of the three sets it is made of. The macro is the
+    mean of the per-dataset numbers and `worst` is the lowest of them — a mean
+    alone hides a collapse on one set.
 
     The second number exists because of PIPAL. Its scores are Elo ratings
     from pairwise comparisons, and every image starts at 1400 — so a score
@@ -83,25 +93,40 @@ def evaluate(backbone, head, loader, device) -> dict:
     correlations asks only the one the ratings can answer.
     """
     head.eval()
-    predictions, targets, references = [], [], []
+    predictions, targets, references, datasets = [], [], [], []
     with torch.no_grad():
         for batch in loader:
             features = embed(backbone, batch["image"].to(device))
             predictions.append(head(features).cpu().numpy())
             targets.append(batch["target"].numpy())
             references.extend(batch["reference"])
+            datasets.extend(batch["dataset"])
     head.train()
     p, t = np.concatenate(predictions), np.concatenate(targets)
+    frame = pd.DataFrame({"p": p, "t": t, "ref": references, "dataset": datasets})
+
+    per_dataset = {}
+    for name, group in frame.groupby("dataset"):
+        if len(group) < 2 or group["t"].nunique() < 2:
+            continue
+        per_dataset[name] = {
+            "srcc": float(stats.spearmanr(group["p"], group["t"]).correlation),
+            "plcc": float(stats.pearsonr(group["p"], group["t"]).statistic),
+            "n": int(len(group)),
+        }
 
     per_reference = []
-    frame = pd.DataFrame({"p": p, "t": t, "ref": references})
     for _, group in frame.groupby("ref"):
         if len(group) >= 8 and group["t"].nunique() > 1:
             per_reference.append(stats.spearmanr(group["p"], group["t"]).correlation)
 
+    srccs = [scores["srcc"] for scores in per_dataset.values()]
     return {
-        "srcc": float(stats.spearmanr(p, t).correlation),
-        "plcc": float(stats.pearsonr(p, t).statistic),
+        "per_dataset": per_dataset,
+        "macro_srcc": float(np.mean(srccs)) if srccs else None,
+        "macro_plcc": float(np.mean([s["plcc"] for s in per_dataset.values()])) if srccs else None,
+        "worst_srcc": float(min(srccs)) if srccs else None,
+        "worst_dataset": min(per_dataset, key=lambda k: per_dataset[k]["srcc"]) if srccs else None,
         "srcc_per_reference": float(np.mean(per_reference)) if per_reference else None,
         "n_references": len(per_reference),
     }
@@ -119,9 +144,11 @@ def main() -> None:
     ap.add_argument("--split", default="reference", choices=["reference", "random"])
     ap.add_argument("--score-column", default="scaled_subjective_score",
                     help="which column of the CSV to regress")
-    ap.add_argument("--sampler", default="random", choices=["random", "balanced", "by_level"])
+    ap.add_argument("--sampler", default="random",
+                    choices=["random", "balanced", "by_level", "by_dataset"])
     ap.add_argument("--workers", type=int, default=4)
-    ap.add_argument("--limit", type=int, default=None, help="use only N training images")
+    ap.add_argument("--limit", type=int, default=None,
+                    help="use only N training images, drawn at random")
     ap.add_argument("--device", default="auto")
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--out", default=None, help="save the trained head here")
@@ -143,8 +170,13 @@ def main() -> None:
     dataset = IQADataset(args.data, image_size=image_size, backbone=family,
                          score_column=args.score_column)
     train_set, val_set = split_by(dataset, args.split, fraction=0.2, seed=args.seed)
-    if args.limit:
-        train_set = train_set.subset(train_set.rows.head(args.limit))
+    if args.limit and args.limit < len(train_set.rows):
+        # Sampled, not the first N rows: the CSV is ordered by dataset and then
+        # by reference, so a head() would train on one dataset and a handful of
+        # its pictures without saying so.
+        train_set = train_set.subset(
+            train_set.rows.sample(args.limit, random_state=args.seed)
+        )
 
     sampler = make_sampler(train_set, args.sampler, seed=args.seed)
     train_loader = DataLoader(
@@ -173,12 +205,17 @@ def main() -> None:
             optimizer.step()
             losses.append(float(loss.detach()))
         scores = evaluate(backbone, head, val_loader, device)
-        line = (f"epoch {epoch}: loss {np.mean(losses):.4f}  "
-                f"SRCC {scores['srcc']:.4f}  PLCC {scores['plcc']:.4f}")
+        print(f"epoch {epoch}: loss {np.mean(losses):.4f}", flush=True)
+        for name, row in sorted(scores["per_dataset"].items()):
+            print(f"    {name:<14s} n {row['n']:>6d}   "
+                  f"SRCC {row['srcc']:.4f}   PLCC {row['plcc']:.4f}")
+        if len(scores["per_dataset"]) > 1:
+            print(f"    {'macro':<14s} {'':>8s}   SRCC {scores['macro_srcc']:.4f}   "
+                  f"PLCC {scores['macro_plcc']:.4f}   "
+                  f"worst {scores['worst_srcc']:.4f} on {scores['worst_dataset']}")
         if scores["srcc_per_reference"] is not None:
-            line += (f"  |  within-reference SRCC {scores['srcc_per_reference']:.4f} "
-                     f"({scores['n_references']} references)")
-        print(line, flush=True)
+            print(f"    {'within-ref':<14s} {'':>8s}   SRCC {scores['srcc_per_reference']:.4f}"
+                  f"   ({scores['n_references']} references)")
 
     if args.out:
         torch.save({"head": head.state_dict(), "backbone": args.backbone,

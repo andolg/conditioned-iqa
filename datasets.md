@@ -13,7 +13,7 @@ distortion, and a fine taxonomy leaves most cells nearly empty.
 | **KADID-10k** | 10,125 | blur · noise · compression · colour · tone · spatial | The only set where the same photograph appears clean and degraded — 81 references, 25 distortions, 5 severities. An effect is attributable to the condition rather than to the content, and this is the only source of the severity check. |
 | **SPAQ** | 11,125 | `authentic` | Ordinary smartphone captures. A constant condition, which makes it the control: a model that improves when handed a constant has learned to recognise the dataset. |
 | **GFIQA-20k** | 19,998 | `authentic` | Faces, where people notice softness they would forgive in a landscape. |
-| **PIPAL** | 24,200 | `generative` (17,800 rows) | Artifacts that restoration algorithms produce — super-resolution, denoising, and the particular strangeness of GAN outputs. See the note below: its scores are Elo ratings and do not compare across references. |
+| **PIPAL** | 24,200 | `generative` (17,800 rows) | Artifacts that restoration algorithms produce — super-resolution, denoising, and the particular strangeness of GAN outputs. See the note below: its scores are Elo ratings and do not compare across references. The 1,000 rows of distortion class `10` are the NTIRE validation split on its own set of references — drop them with `df[df.distortion != 10]` to train on the training split alone. |
 | **AIGCIQA2023** | 2,400 | `generative` | Generated images, whose artifacts have no counterpart in anything a camera or codec does. Prompts are the split key. |
 
 ## Held out
@@ -98,6 +98,21 @@ Splits go by reference. In KADID a hundred and twenty-five rows are one
 photograph; splitting them across the boundary lets the model score by
 recognising the picture — up to 0.44 SRCC of it on frozen features. For
 photographs, splitting by image is fine.
+
+The held-out share is drawn from each dataset separately. A reference is one
+photograph in KonIQ and a hundred and twenty-five rows in KADID, so a single
+draw over the pool is decided by whichever release has the most references,
+and a dataset can miss the held-out side altogether — measured on a combined
+table, one of three training sets came out with nothing held out at all. For
+the same reason `reference` is written with its dataset in front of it:
+KADID and TID2013 both call a reference `i01`, and they are not the same
+picture.
+
+SPAQ ships scene categories and EXIF beside its MOS, in
+`Annotations/`. Grouping its split by scene rather than by image is a change
+to `read_spaq` in `prepare_data.py`; note that it leaves nine groups, so a
+fifth of them is one scene held out, and the split becomes a test of
+generalising across scenes rather than an in-domain one.
 
 Every dataset is min-maxed into [0, 1] with higher meaning better, and the
 published number stays beside it in `original_subjective_score`. CSIQ's DMOS

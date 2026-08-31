@@ -69,6 +69,7 @@ class IQADataset(Dataset):
             "image": (pixels - self.mean) / self.std,
             "target": torch.tensor(float(row[self.score_column]), dtype=torch.float32),
             "reference": str(row["reference"]),
+            "dataset": str(row.get("dataset", "")),
             "distortion": str(row.get("distortion", "")),
             "level": int(row["level"]) if pd.notna(row.get("level")) else -1,
         }
@@ -78,8 +79,23 @@ class IQADataset(Dataset):
         return IQADataset(rows, self.image_size, backbone, self.score_column)
 
 
+def _blocks(rows: pd.DataFrame):
+    """The frame split per dataset, or as one block when the column is absent.
+
+    Both strategies below draw the held-out share from each dataset separately.
+    On a single-dataset CSV that changes nothing; on a combined one it is the
+    difference between a split and a lottery, because a reference means
+    different things in different releases — one photograph in KonIQ, 125 rows
+    in KADID. Pooling them lets one release dominate the draw, and a dataset
+    can miss the held-out side entirely.
+    """
+    if "dataset" not in rows.columns:
+        return [rows]
+    return [block for _, block in rows.groupby("dataset", sort=True)]
+
+
 def split_by(dataset: IQADataset, strategy: str = "reference", fraction: float = 0.2, seed: int = 0):
-    """Split into (train, held out).
+    """Split into (train, held out), taking `fraction` from every dataset.
 
     "reference": every version of one pristine image lands on one side. The
         default, and the only honest option for the synthetic sets: 125
@@ -91,13 +107,19 @@ def split_by(dataset: IQADataset, strategy: str = "reference", fraction: float =
     """
     rng = np.random.default_rng(seed)
     if strategy == "random":
-        order = rng.permutation(len(dataset.rows))
-        cut = int(len(order) * (1 - fraction))
-        train, held = dataset.rows.iloc[order[:cut]], dataset.rows.iloc[order[cut:]]
+        held_index = []
+        for block in _blocks(dataset.rows):
+            order = rng.permutation(len(block))
+            cut = int(len(order) * (1 - fraction))
+            held_index.extend(block.index[order[cut:]])
+        mask = dataset.rows.index.isin(held_index)
+        train, held = dataset.rows[~mask], dataset.rows[mask]
     elif strategy == "reference":
-        references = np.array(sorted(dataset.rows["reference"].unique()))
-        held_refs = set(references[rng.permutation(len(references))]
-                        [: max(1, int(len(references) * fraction))])
+        held_refs: set[str] = set()
+        for block in _blocks(dataset.rows):
+            references = np.array(sorted(block["reference"].unique()))
+            keep = max(1, round(len(references) * fraction))
+            held_refs.update(references[rng.permutation(len(references))][:keep])
         mask = dataset.rows["reference"].isin(held_refs)
         train, held = dataset.rows[~mask], dataset.rows[mask]
     else:

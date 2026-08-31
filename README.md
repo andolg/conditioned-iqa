@@ -4,7 +4,12 @@ A quality metric usually gets an image and nothing else. This project asks
 whether telling it what kind of distortion it is looking at makes its scores
 agree better with human ones.
 
-Four files to get you to a number today:
+The full statement — research directions, how it is evaluated, what to hand
+in — is at
+[dreminm.github.io/iqa-summer-school/project-1.html](https://dreminm.github.io/iqa-summer-school/project-1.html).
+This repository is where you start from.
+
+Four scripts and a note to get you to a number today:
 
 ```
 download_data.py   fetch a dataset and unpack it
@@ -17,7 +22,9 @@ datasets.md        what trains, what is held out, and why
 ## Run it
 
 ```
-uv venv --python 3.12 && uv pip install -e .
+uv venv --python 3.12
+source .venv/bin/activate        # .venv\Scripts\activate on Windows
+uv pip install -e .
 
 python download_data.py --list
 python download_data.py kadid10k --data-root ~/iqa-data     # 2.9 GB, start here
@@ -25,8 +32,12 @@ python prepare_data.py ~/iqa-data/kadid10k
 python train.py --data ~/iqa-data/kadid10k/labels.csv --epochs 5
 ```
 
-The first run downloads CLIP weights (~600 MB). Use `--limit 2000` while you
-are still wiring things up.
+Use `--limit 2000` while you are still wiring things up — it samples that many
+training images at random, and leaves the held-out split whole.
+
+Downloads run in parallel byte ranges, because the mirror throttles a single
+sustained connection to a crawl. Pass `--connections 1` if a proxy dislikes
+range requests.
 
 ## What prepare_data does
 
@@ -49,7 +60,10 @@ individual type, because no two releases share a type vocabulary and a
 per-type label teaches the corpus instead of the distortion.
 
 Point it at several directories with `--out all.csv` to get one table for
-all of them.
+all of them — `python prepare_data.py ~/iqa-data/*/ --out ~/iqa-data/all.csv`
+prepares everything you have downloaded. On a table like that, train with
+`--sampler by_dataset` so the largest set does not decide the batch, and read
+the per-dataset rows rather than one pooled number.
 
 ## Splitting
 
@@ -61,23 +75,27 @@ train, val = split_by(data, "reference")        # or "random"
 sampler = make_sampler(train, "balanced")       # or "random", "by_level", "by_dataset"
 ```
 
-`split_by` keeps a pristine reference whole on one side, and that default
-matters: in KADID a hundred and twenty-five rows are one photograph seen
-through twenty-five distortions, so splitting them apart lets the model
-score the held-out ones by recognising the picture. On frozen features that
-is worth up to 0.44 SRCC — more than any effect you are looking for. Use
-`"random"` for photographs, where every image is its own scene.
+`split_by` keeps a pristine reference whole on one side, and takes its share
+from every dataset separately. Both defaults matter. In KADID a hundred and
+twenty-five rows are one photograph seen through twenty-five distortions, so
+splitting them apart lets the model score the held-out ones by recognising
+the picture — on frozen features that is worth up to 0.44 SRCC, more than any
+effect you are looking for. And a reference means different things in
+different releases, one photograph here and a hundred and twenty-five rows
+there, so drawing the held-out share from the pool would let one release
+decide the split. Use `"random"` for photographs, where every image is its
+own scene.
 
 `make_sampler` weights batches by distortion type, severity or dataset
 instead of letting the counts decide.
 
 ## Where to go next
 
-`train.py` is short and meant to be edited. `--backbone clip-large` or
-`siglip`, `QualityMLP` for a different head, `embed()` if you want patch
-tokens instead of the pooled embedding. Every batch already carries
-`distortion`, `level` and `group`, so conditioning the model on them is a
-change to `train.py` alone.
+`train.py` is short and meant to be edited. `--backbone clip-large`,
+`siglip2-base` or `siglip2-large`, `QualityMLP` for a different head,
+`embed()` if you want patch tokens instead of the pooled embedding. Every
+batch already carries `distortion`, `level` and `group`, so conditioning the
+model on them is a change to `train.py` alone.
 
 Which datasets train, which are held out and what each one is for:
 [datasets.md](datasets.md).

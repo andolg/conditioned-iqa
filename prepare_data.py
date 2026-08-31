@@ -4,15 +4,16 @@
     python prepare_data.py ~/iqa-data/*/ --out ~/iqa-data/all.csv
 
 Every release ships its labels differently — `dmos.csv` here, a MATLAB
-struct there, a text file of "score filename" lines. This script reads
-whichever one it finds and writes:
+struct there, an xlsx, a text file of "score filename" lines, one label file
+per reference. This script reads whichever one it finds and writes:
 
     path                       absolute path to the image
     original_subjective_score  the score exactly as the release gives it
     scaled_subjective_score    the same, min-maxed into [0, 1], higher = better
     dataset                    which dataset the row came from
     reference                  the pristine image this is a version of, or the
-                               image itself for photographs with no reference
+                               image itself for photographs with no reference,
+                               prefixed with the dataset name
     distortion, level          the type and severity as the release records them
     group                      that type folded into one of eight distortion
                                groups
@@ -40,8 +41,10 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-# Releases whose score runs backwards (higher = worse quality).
-FLIPPED = {"csiq", "live"}
+# Releases whose score runs backwards (higher = worse quality). Matched
+# exactly, never as a substring: "live" is inside "clive", and CLIVE's MOS
+# runs the right way up.
+FLIPPED = {"csiq", "liveiqa", "livemd"}
 
 
 # <reference>_<type>_<level>: I01_02_03.png (KADID), i01_02_3.bmp (TID2013)
@@ -324,6 +327,91 @@ def read_aigciqa2023(root: Path, labels: Path, images: dict[str, Path]) -> list[
     return rows
 
 
+def read_csiq_label(root: Path, labels: Path, images: dict[str, Path]) -> list[dict]:
+    """`csiq_label.txt` — "<filename> <dmos>" lines, the shape CSIQ ships in.
+
+    Note the column order is the reverse of TID2013's `mos_with_names.txt`.
+    The score is a DMOS and gets flipped downstream.
+    """
+    rows = []
+    for line in labels.read_text().splitlines():
+        if not line.strip():
+            continue
+        name, score = line.split()
+        rows.append({"path": images.get(name, root / name),
+                     "original_subjective_score": float(score),
+                     **dict(zip(("reference", "distortion", "level"), parse_name(name, {})))})
+    return rows
+
+
+def read_clive(root: Path, labels: Path, images: dict[str, Path]) -> list[dict]:
+    """CLIVE: filenames and MOS in two MATLAB structs beside each other.
+
+    The first seven rows are the calibration images every subject scored
+    before the study proper, and the release excludes them from its 1,162.
+    """
+    from scipy.io import loadmat
+
+    names = [str(entry[0]) for entry in
+             loadmat(labels.parent / "AllImages_release.mat")["AllImages_release"].ravel()]
+    scores = loadmat(labels)["AllMOS_release"].ravel()
+    return [
+        {"path": images.get(name, root / name), "original_subjective_score": float(score),
+         "reference": name.split(".")[0].lower(), "distortion": None, "level": None}
+        for name, score in zip(names[7:], scores[7:])
+    ]
+
+
+def read_agiqa3k(root: Path, labels: Path, images: dict[str, Path]) -> list[dict]:
+    """AGIQA-3K: `mos_quality` is the axis this is about, `mos_align` is not.
+
+    The archive on the mirror carries images only; `download_data.py` fetches
+    this table from the dataset's own repository. The generation prompt is the
+    reference — images from one prompt are variations on one idea.
+    """
+    df = pd.read_csv(labels)
+    return [
+        {"path": images.get(name, root / name), "original_subjective_score": float(score),
+         "reference": str(prompt).lower(), "distortion": None, "level": None}
+        for name, score, prompt in zip(df["name"].astype(str), df["mos_quality"], df["prompt"])
+    ]
+
+
+def read_pipal(root: Path, labels: Path, images: dict[str, Path]) -> list[dict]:
+    """PIPAL: one `<reference>.txt` of "name,elo" per reference, plus `val_label.txt`.
+
+    `Aaaaa_bb_cc` carries the reference, the distortion class and the variant,
+    so the filename is the only metadata needed. Class `10` is the NTIRE
+    validation split — a separate set of references, which the training recipe
+    excludes; it stays in the table under that class so it can be filtered.
+    """
+    rows = []
+    for path in sorted((labels.parent / "Train_Label").glob("*.txt")) + [labels]:
+        for line in path.read_text().splitlines():
+            if not line.strip():
+                continue
+            name, score = (field.strip() for field in line.split(","))
+            rows.append({"path": images.get(name, root / name),
+                         "original_subjective_score": float(score),
+                         **dict(zip(("reference", "distortion", "level"), parse_name(name, {})))})
+    return rows
+
+
+def read_spaq(root: Path, labels: Path, images: dict[str, Path]) -> list[dict]:
+    """SPAQ: an xlsx of MOS beside five perceptual attribute scores.
+
+    Only the overall MOS is read. The scene categories and the EXIF tags sit in
+    their own workbooks in the same directory, unread here — a scene-grouped
+    split needs them, and that is a change to this reader.
+    """
+    df = pd.read_excel(labels)
+    return [
+        {"path": images.get(name, root / name), "original_subjective_score": float(score),
+         "reference": name.split(".")[0].lower(), "distortion": None, "level": None}
+        for name, score in zip(df["Image name"].astype(str), df["MOS"])
+    ]
+
+
 # Label file to look for, and the reader for it. First match wins, so the
 # unified data.csv takes precedence wherever a release ships one.
 READERS = (
@@ -331,8 +419,13 @@ READERS = (
     ("dmos.csv", read_kadid),
     ("koniq10k_scores_and_distributions.csv", read_koniq),
     ("mos_with_names.txt", read_tid2013),
+    ("csiq_label.txt", read_csiq_label),
     ("mos_val_rating.csv", read_gfiqa),
     ("CID2013 data*.xlsx", read_cid2013),
+    ("MOS and Image attribute scores.xlsx", read_spaq),
+    ("AllMOS_release.mat", read_clive),
+    ("val_label.txt", read_pipal),
+    ("agiqa3k_data.csv", read_agiqa3k),
     ("uhd-iqa-metadata.csv", read_uhdiqa),
     ("aigciqa2023_labels.json", read_aigciqa2023),
     ("AIGIQA2023.json", read_aigciqa2023),
@@ -355,11 +448,15 @@ def prepare(root: Path) -> pd.DataFrame:
 
     df = pd.DataFrame(rows)
     df["dataset"] = root.name.lower()
+    # Prefixed with the dataset: KADID and TID2013 both call a reference "i01",
+    # and in a combined CSV `split_by` would treat those as one picture and put
+    # rows from two datasets on the same side for the wrong reason.
+    df["reference"] = df["dataset"] + "/" + df["reference"].astype(str)
     df["path"] = df["path"].map(str)
     df["group"] = [assign_group(d, t) for d, t in zip(df["dataset"], df["distortion"])]
 
     scores = df["original_subjective_score"].to_numpy(dtype=float)
-    if any(flipped in df["dataset"].iloc[0] for flipped in FLIPPED):
+    if df["dataset"].iloc[0] in FLIPPED:
         scores = -scores
     low, high = scores.min(), scores.max()
     if high - low < 1e-12:
@@ -375,6 +472,10 @@ def prepare(root: Path) -> pd.DataFrame:
     if missing.any():
         print(f"  {int(missing.sum())} of {len(df)} images not found on disk, dropped")
         df = df[~missing]
+    if df.empty:
+        raise FileNotFoundError(
+            f"{root}: a label file was found but none of its images are on disk"
+        )
     return df[
         [
             "path",
@@ -399,7 +500,16 @@ def main() -> None:
     for root in args.roots:
         path = Path(root)
         print(f"{path.name}:")
-        df = prepare(path)
+        try:
+            df = prepare(path)
+        except FileNotFoundError as problem:
+            # `~/iqa-data/*/` also matches `archives/`, which download_data.py
+            # leaves behind. One directory without labels should not take the
+            # whole run down with it.
+            if len(args.roots) == 1:
+                raise
+            print(f"  skipped — {problem}")
+            continue
         groups = df["group"].dropna().unique()
         print(f"  {len(df)} rows, {df['reference'].nunique()} references, "
               f"groups: {', '.join(sorted(groups)) if len(groups) else 'none (unmapped)'}, "
