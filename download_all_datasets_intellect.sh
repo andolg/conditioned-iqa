@@ -8,12 +8,26 @@ data_root=${1:-conditioned-iqa/data}
 script_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 downloader="$script_dir/download_data.py"
 
-# Training datasets
-for dataset in kadid10k spaq gfiqa20k pipal aigciqa2023; do
-    python "$downloader" "$dataset" --data-root "$data_root"
+pids=""
+
+cleanup() {
+    [ -z "$pids" ] || kill $pids 2>/dev/null || true
+}
+
+trap 'cleanup; exit 130' INT
+trap 'cleanup; exit 143' TERM
+
+# Start every training and held-out dataset download concurrently.
+for dataset in kadid10k spaq gfiqa20k pipal aigciqa2023 \
+    tid2013 csiq cid2013 koniq10k clive agiqa3k uhdiqa; do
+    echo "starting: $dataset"
+    python "$downloader" "$dataset" --data-root "$data_root" &
+    pids="$pids $!"
 done
 
-# Held-out datasets
-for dataset in tid2013 csiq cid2013 koniq10k clive agiqa3k uhdiqa; do
-    python "$downloader" "$dataset" --data-root "$data_root"
+status=0
+for pid in $pids; do
+    wait "$pid" || status=1
 done
+
+exit "$status"

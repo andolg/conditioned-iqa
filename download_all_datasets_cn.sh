@@ -6,14 +6,28 @@ set -eu
 
 data_root=${1:-conditioned-iqa/data}
 script_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
-downloader="$script_dir/download_dataset_mirrors.py"
+downloader="$script_dir/download_data_mirrors.py"
 
-# Training datasets
-for dataset in kadid10k spaq gfiqa20k pipal aigciqa2023; do
-    python3 "$downloader" "$dataset" --data-root "$data_root"
+pids=""
+
+cleanup() {
+    [ -z "$pids" ] || kill $pids 2>/dev/null || true
+}
+
+trap 'cleanup; exit 130' INT
+trap 'cleanup; exit 143' TERM
+
+# KADID-10k is already downloaded; start every other dataset concurrently.
+for dataset in spaq gfiqa20k pipal aigciqa2023 \
+    tid2013 csiq cid2013 koniq10k clive agiqa3k uhdiqa; do
+    echo "starting: $dataset"
+    python3 "$downloader" "$dataset" --data-root "$data_root" &
+    pids="$pids $!"
 done
 
-# Held-out datasets
-for dataset in tid2013 csiq cid2013 koniq10k clive agiqa3k uhdiqa; do
-    python3 "$downloader" "$dataset" --data-root "$data_root"
+status=0
+for pid in $pids; do
+    wait "$pid" || status=1
 done
+
+exit "$status"
