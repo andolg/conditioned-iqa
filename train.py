@@ -171,6 +171,7 @@ def main() -> None:
     backbone, image_size, feature_dim = load_backbone(args.backbone, args.weights, device)
     family = "siglip" if args.backbone.startswith("siglip") else "clip"
 
+    print("image_size: ", image_size)
     dataset = IQADataset(args.data, image_size=image_size, backbone=family,
                          score_column=args.score_column)
     train_set, val_set = split_by(dataset, args.split, fraction=0.2, seed=args.seed)
@@ -202,6 +203,7 @@ def main() -> None:
     for epoch in range(args.epochs):
         losses = []
         for batch in train_loader:
+            print(f"epoch {epoch} batch {len(losses)} of {len(train_loader)}; device: {device}", flush=True)
             features = embed(backbone, batch["image"].to(device))
             loss = loss_fn(head(features), batch["target"].to(device))
             optimizer.zero_grad()
