@@ -29,6 +29,7 @@ from torch import nn
 from torch.utils.data import DataLoader
 
 from dataset import IQADataset, make_sampler, split_by
+from hf_mirror_utils import load_transformers_model_from_mirrors
 
 BACKBONES = {
     "clip-base": ("openai/clip-vit-base-patch16", 224),
@@ -61,9 +62,12 @@ def load_backbone(name: str, weights: str | None, device: torch.device):
     from transformers import CLIPVisionModel, SiglipVisionModel
 
     hf_id, image_size = BACKBONES[name]
-    source = weights or hf_id
     model_class = SiglipVisionModel if name.startswith("siglip") else CLIPVisionModel
-    model = model_class.from_pretrained(source).eval().requires_grad_(False).to(device)
+    if weights:
+        model = model_class.from_pretrained(weights, local_files_only=True)
+    else:
+        model = load_transformers_model_from_mirrors(model_class, hf_id)
+    model = model.eval().requires_grad_(False).to(device)
     return model, image_size, model.config.hidden_size
 
 

@@ -20,7 +20,8 @@ dependencies = [
 py-modules = [
     "dataset",
     "download_data",
-    "download_dataset_mirrors",
+    "download_data_mirrors",
+    "hf_mirror_utils",
     "prepare_data",
     "train",
 ]
