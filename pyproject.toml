@@ -17,4 +17,10 @@ dependencies = [
 # refuses to guess which of them to install. Naming them keeps `pip install -e .`
 # working and makes them importable from anywhere.
 [tool.setuptools]
-py-modules = ["dataset", "download_data", "prepare_data", "train"]
+py-modules = [
+    "dataset",
+    "download_data",
+    "download_dataset_mirrors",
+    "prepare_data",
+    "train",
+]
