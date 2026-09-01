@@ -1,0 +1,3 @@
+run_name: joint-pretrained-hard-concat-kadid
+training_mode: joint
+classifier_labels: hard

@@ -1,0 +1,3 @@
+run_name: frozen-trained-hard-concat-kadid
+training_mode: frozen
+classifier_labels: hard

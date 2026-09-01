@@ -1,0 +1,41 @@
+exp_name: label-conditioned
+run_name: joint-trained-soft-concat-kadid
+data: ~/conditioned-iqa/data/kadid10k/labels.csv
+
+backbone: clip-base
+weights: null
+hidden_dim: 256
+dropout: 0.1
+
+# concat (default), add, or film
+fusion: concat
+
+# hard: prepared one-hot groups; frozen: classifier predictions; joint: both losses
+training_mode: joint
+# Used by frozen/joint. Soft keeps the IQA loss differentiable through the classifier.
+classifier_labels: soft
+# Set to null for an untrained joint classifier; frozen normally uses a checkpoint.
+classifier_checkpoint: weights/dist-group-classifier/rn18-kadid10k/best.pt
+classifier_imagenet_pretrained: true
+# null matches the existing KADID classifier; set a size for variable-sized datasets.
+classifier_image_size: null
+lambda_iqa: 1.0
+lambda_cls: 0.25
+
+epochs: 20
+batch_size: 32
+lr: 0.001
+classifier_lr: 0.0001
+weight_decay: 0.0001
+split: reference
+val_fraction: 0.2
+score_column: scaled_subjective_score
+sampler: random
+workers: 4
+limit: null
+device: cuda:0
+seed: 0
+
+mlflow: true
+mlflow_tracking_uri: mlruns
+checkpoint_dir: weights

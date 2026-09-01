@@ -11,6 +11,7 @@ from torch.utils.data import DataLoader
 from models.dist_classifier.dataset import DistortionDataset, split_by_reference
 from models.dist_classifier.model import DistortionClassifier
 
+# From prepare_data.py
 GROUPS = (
     "compression", "generative", "blur", "noise",
     "color", "tone", "spatial", "authentic",

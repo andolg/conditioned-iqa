@@ -1,0 +1,3 @@
+run_name: hard-labels-concat-kadid
+training_mode: hard
+classifier_labels: hard
