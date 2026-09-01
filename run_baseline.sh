@@ -4,4 +4,6 @@ REVISION="$(cat "$CACHE_REPO/refs/main")"
 python3 train.py \
   --data ~/conditioned-iqa/data/kadid10k/labels.csv \
   --backbone clip-large \
-  --weights "$CACHE_REPO/snapshots/$REVISION"
+  --device cuda:7 \
+  --weights "$CACHE_REPO/snapshots/$REVISION" \
+  --out ~/conditioned-iqa/28a_dol/conditioned-iqa/weights/baseline_clip_large.pth
