@@ -9,30 +9,34 @@ from torchvision import transforms
 
 IMAGENET_MEAN = (0.485, 0.456, 0.406)
 IMAGENET_STD = (0.229, 0.224, 0.225)
-CLEAN_CLASS = 25
 
 
-def split_kadid(csv: str | Path, val_fraction: float, seed: int):
+def split_by_reference(csv: str | Path, val_fraction: float, seed: int):
     rows = pd.read_csv(Path(csv).expanduser())
-    references = np.array(sorted(rows["reference"].unique()))
     rng = np.random.default_rng(seed)
-    val_count = max(1, round(len(references) * val_fraction))
-    val_references = set(rng.permutation(references)[:val_count])
+    val_references = set()
+    blocks = rows.groupby("dataset") if "dataset" in rows else [(None, rows)]
+    for _, block in blocks:
+        references = np.array(sorted(block["reference"].unique()))
+        count = max(1, round(len(references) * val_fraction))
+        val_references.update(rng.permutation(references)[:count])
     is_val = rows["reference"].isin(val_references)
     return rows[~is_val].reset_index(drop=True), rows[is_val].reset_index(drop=True)
 
 
-class KADIDDistortionDataset(Dataset):
-    def __init__(self, rows: pd.DataFrame, image_size: int | None = None, train: bool = False):
+class DistortionDataset(Dataset):
+    def __init__(
+        self,
+        rows: pd.DataFrame,
+        group_to_label: dict[str, int],
+        image_size: int | None = None,
+        train: bool = False,
+    ):
         self.samples = [
-            (Path(row.path), int(row.distortion) - 1)
+            (Path(row.path), group_to_label[row.group])
             for row in rows.itertuples()
+            if row.group in group_to_label
         ]
-        for _, group in rows.groupby("reference"):
-            distorted = Path(group.iloc[0]["path"])
-            clean = distorted.with_name(distorted.stem.split("_")[0] + distorted.suffix)
-            self.samples.append((clean, CLEAN_CLASS))
-
         operations = []
         if image_size is not None:
             operations += [

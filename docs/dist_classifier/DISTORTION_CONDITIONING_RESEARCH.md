@@ -1,4 +1,4 @@
-# Distortion-conditioned IQA: literature review and experiment plan
+# Distortion-conditioned IQA: literature review and experiment plan. DISCARDED
 
 **Date:** 2026-09-01
 

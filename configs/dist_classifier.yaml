@@ -1,7 +1,6 @@
-exp_name: kadid10k-dist-resnet18
-run_name: orig-img-size
+exp_name: dist-group-classifier
+run_name: rn18-kadid10k
 data: ~/conditioned-iqa/data/kadid10k/labels.csv
-num_classes: 26
 pretrained: true
 epochs: 20
 batch_size: 64
@@ -9,7 +8,6 @@ lr: 0.0001
 weight_decay: 0.0001
 val_fraction: 0.2
 workers: 4
-device: cuda:1
+device: cuda:4
 seed: 0
 mlflow_tracking_uri: mlruns
-mlflow_experiment: distortion-classifier
