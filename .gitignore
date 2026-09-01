@@ -1,5 +1,6 @@
 # Custom
 weights/
+uv.lock
 
 # Environments
 .venv/

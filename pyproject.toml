@@ -9,6 +9,7 @@ description = "Quick start for the summer-school project on conditioned image qu
 requires-python = ">=3.11,<3.13"
 dependencies = [
     "torch==2.13.0",
+    "torchvision",
     "transformers>=4.37",
     "pandas",
     "openpyxl",  # SPAQ and CID2013 ship their labels as xlsx
@@ -21,6 +22,7 @@ dependencies = [
 
 [tool.uv.sources]
 torch = { index = "pytorch-cu126" }
+torchvision = { index = "pytorch-cu126" }
 
 [[tool.uv.index]]
 name = "pytorch-cu126"
