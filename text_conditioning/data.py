@@ -12,7 +12,8 @@ class ConditionedIQADataset(IQADataset):
 
     def __getitem__(self, index: int) -> dict:
         item = super().__getitem__(index)
-        item["group"] = str(self.rows.iloc[index].get("group", "authentic"))
+        group = self.rows.iloc[index].get("group", "authentic")
+        item["group"] = "authentic" if pd.isna(group) else str(group)
         return item
 
     def subset(self, rows: pd.DataFrame) -> ConditionedIQADataset:

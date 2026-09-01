@@ -21,7 +21,13 @@ from scipy import stats
 from torch.utils.data import DataLoader
 
 from dataset import make_sampler, split_by
-from result_reporting import ResultReporter, add_reporting_arguments, size_megabytes
+from result_reporting import (
+    ResultReporter,
+    add_reporting_arguments,
+    measure_flops,
+    measure_latency_memory,
+    size_megabytes,
+)
 from text_conditioning.data import ConditionedIQADataset
 from text_conditioning.models import ResidualTextHead, TextFusionHead
 from text_conditioning.prompts import (
@@ -238,6 +244,17 @@ def main() -> None:
                     tracker.mlflow.log_metric(f"intervention/{mode}/macro_srcc", intervention_scores["macro_srcc"])
                 print(f"{mode}: macro SRCC {intervention_scores['macro_srcc']:.4f}", flush=True)
         images_per_second = final_validation_scores["images"] / final_validation_scores["elapsed_seconds"]
+        def forward_once():
+            features = embed(backbone, torch.randn(1, 3, image_size, image_size, device=device))
+            if prompts is None:
+                return head(features)
+            return head(features, torch.randn(1, text_dim, device=device))
+
+        latency_p50_ms, latency_p95_ms, peak_memory_mb = measure_latency_memory(
+            forward_once, device
+        )
+        flops = measure_flops(forward_once)
+        image_throughput = 1000 / latency_p50_ms if latency_p50_ms else images_per_second
         report_rows = [
             {
                 "run_id": run_id,
@@ -248,6 +265,10 @@ def main() -> None:
                 "backbone": args.backbone,
                 "method": args.method,
                 "seed": args.seed,
+                "epochs": args.epochs,
+                "latency_p50_ms": latency_p50_ms,
+                "latency_p95_ms": latency_p95_ms,
+                "peak_memory_mb": peak_memory_mb,
                 "images": row["n"],
                 "srcc": row["srcc"],
                 "plcc": row["plcc"],
@@ -271,6 +292,11 @@ def main() -> None:
                 "system/validation_images_per_second": images_per_second,
                 "system/head_size_mb": size_megabytes(head),
                 "system/model_parameter_size_mb": size_megabytes(backbone) + size_megabytes(head),
+                "system/latency_p50_ms": latency_p50_ms,
+                "system/latency_p95_ms": latency_p95_ms,
+                "system/peak_memory_mb": peak_memory_mb,
+                "system/image_throughput": image_throughput,
+                "system/flops": flops,
             })
         tracker.log_checkpoint(head, args, vision_dim)
         if args.out:
