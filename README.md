@@ -62,6 +62,44 @@ If the virtual environment is already activated, the shorter equivalent is
 `mlflow ui --backend-store-uri sqlite:///mlflow.db`. Run either command from
 the repository root, where `mlflow.db` is created.
 
+## Shared results table and held-out tests
+
+Every new text-conditioned training run and every run of
+`evaluate_text_conditioned.py` appends a row to `runs/results.csv`. The row
+contains the run and source-run IDs, dataset, SRCC/PLCC, inference throughput,
+and head/total parameter size. To backfill completed MLflow runs, use:
+
+```
+uv run python sync_mlflow_results.py
+```
+
+To append the same rows to a shared Google Sheet, install the optional client,
+create a service account with the Google Sheets API enabled, share the sheet
+with that account as an editor, then configure these environment variables:
+
+```
+uv sync --extra sheets
+export IQA_GOOGLE_SHEET_ID='spreadsheet-id-from-its-URL'
+export IQA_GOOGLE_WORKSHEET='Results'
+export GOOGLE_APPLICATION_CREDENTIALS='/absolute/path/to/service-account.json'
+```
+
+Do not put the service-account JSON in a config file or Git. The reporting
+code redacts JSON credentials from MLflow artifacts. Existing runs can then be
+backfilled into the Sheet with `sync_mlflow_results.py` under the same
+environment.
+
+Evaluate a completed text-conditioned MLflow checkpoint on prepared held-out
+datasets without retraining:
+
+```
+uv run python evaluate_text_conditioned.py --source-run-id RUN_ID \
+  --data ~/iqa-data/tid2013/labels.csv ~/iqa-data/csiq/labels.csv
+```
+
+The held-out protocol and current transfer results are in
+[datasets.md](datasets.md) and [docs/external-evaluation-results.md](docs/external-evaluation-results.md).
+
 Use `--limit 2000` while you are still wiring things up — it samples that many
 training images at random, and leaves the held-out split whole.
 

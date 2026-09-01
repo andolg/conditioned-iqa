@@ -1,0 +1,16 @@
+data: /home/sergey/conditioned-iqa/data/kadid10k/labels.csv
+weights: /home/sergey/.cache/huggingface/hub/models--openai--clip-vit-base-patch16/snapshots/57c216476eefef5ab752ec549e440a49ae4ae5f3
+good_prompt: a good quality image
+bad_prompt: a bad quality image
+split: reference
+batch_size: 32
+workers: 2
+device: cuda:5
+seed: 0
+mlflow: true
+mlflow_tracking_uri: sqlite:///mlflow.db
+mlflow_experiment: conditioned-iqa-text
+mlflow_run_name: clip-iqa-zeroshot-s0
+config_dir: runs/configs
+google_sheet_id: 1DZQKInig5PtctN23TXEkMzrdcc1uA9aATaxT3LTXYZY
+google_worksheet: Results

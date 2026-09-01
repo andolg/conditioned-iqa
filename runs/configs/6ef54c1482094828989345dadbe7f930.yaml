@@ -1,0 +1,33 @@
+backbone: clip-base
+batch_size: 32
+command: train_text_conditioned.py --config configs/text_conditioning/02_text_interaction.yaml
+  --device cuda:5 --seed 1 --mlflow-run-name tc-interaction-heldout-s1
+condition_dropout: 0.0
+config: configs/text_conditioning/02_text_interaction.yaml
+config_dir: runs/configs
+data: /home/sergey/conditioned-iqa/data/kadid10k/labels.csv
+device: cuda:5
+device_used: cuda:5
+epochs: 5
+feature_dim: 768
+fusion_dim: 256
+hidden_dim: 256
+limit: null
+lr: 0.001
+method: interaction
+mlflow: true
+mlflow_experiment: conditioned-iqa-text
+mlflow_run_id: 6ef54c1482094828989345dadbe7f930
+mlflow_run_name: tc-interaction-heldout-s1
+mlflow_tracking_uri: sqlite:///mlflow.db
+out: null
+sampler: random
+score_column: scaled_subjective_score
+seed: 1
+split: reference
+text_weights: /home/sergey/.cache/huggingface/hub/models--openai--clip-vit-base-patch16/snapshots/57c216476eefef5ab752ec549e440a49ae4ae5f3
+train_size: 8125
+trainable_parameters: 529409
+validation_size: 2000
+weights: /home/sergey/.cache/huggingface/hub/models--openai--clip-vit-base-patch16/snapshots/57c216476eefef5ab752ec549e440a49ae4ae5f3
+workers: 2
