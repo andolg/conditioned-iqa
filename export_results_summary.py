@@ -88,6 +88,11 @@ DESIGNS = {
         "description": "Concat [image, text, image*text] -> MLP",
         "backbone": "CLIP-B/16",
     },
+    ("clip-base", "interaction", "instructor"): {
+        "design": "CLIP-B/16 interaction (INSTRUCTOR)",
+        "description": "Concat [image, INSTRUCTOR text, image*text] -> MLP",
+        "backbone": "CLIP-B/16",
+    },
     ("clip-base", "residual"): {
         "design": "CLIP-B/16 residual",
         "description": "Unconditional base score + text correction",
@@ -163,11 +168,16 @@ def canonical_rows(rows: list[dict[str, str]]) -> list[dict[str, str]]:
             continue
         if "heldout" in run_name:
             continue
+        if "instructor" in run_name and "best" not in run_name:
+            continue
         filtered.append(row)
     return filtered
 
 
 def design_family(row: dict[str, str], joint_source_ids: set[str] | None = None) -> str:
+    metadata = " ".join((str(row.get("run_name", "")), str(row.get("config_path", "")))).lower()
+    if "instructor" in metadata:
+        return "instructor"
     source = str(row.get("source_run_id") or row.get("run_id") or "")
     if joint_source_ids is not None:
         return "joint" if source in joint_source_ids else "standard"

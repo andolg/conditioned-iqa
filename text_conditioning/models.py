@@ -6,6 +6,46 @@ import torch
 from torch import nn
 
 
+class DatasetScaleHead(nn.Module):
+    """Shared quality scorer with monotonic per-dataset calibration.
+
+    The shared scorer is the value used for an unseen dataset. During
+    training/validation, a known dataset receives its own sigmoid calibration
+    so incompatible MOS ranges are not forced through one global scale. An
+    unknown dataset deliberately falls back to the shared latent score.
+    """
+
+    def __init__(self, base: nn.Module, datasets: list[str]):
+        super().__init__()
+        self.base = base
+        self.datasets = tuple(sorted(dict.fromkeys(str(name) for name in datasets)))
+        self.index = {name: position for position, name in enumerate(self.datasets)}
+        self.calibration_bias = nn.Parameter(torch.zeros(len(self.datasets)))
+        # softplus(log-slope) starts at one and remains strictly positive.
+        self.calibration_log_slope = nn.Parameter(
+            torch.full((len(self.datasets),), 0.54132485)
+        )
+
+    @property
+    def latent(self) -> nn.Module:
+        return self.base
+
+    def forward(self, vision: torch.Tensor, text: torch.Tensor | None = None,
+                datasets: list[str] | tuple[str, ...] | None = None) -> torch.Tensor:
+        latent = self.base(vision) if text is None else self.base(vision, text)
+        if datasets is None:
+            return latent
+        names = [str(name) for name in datasets]
+        known = torch.tensor([self.index.get(name, -1) for name in names], device=latent.device)
+        output = latent.clone()
+        mask = known.ge(0)
+        if mask.any():
+            slope = torch.nn.functional.softplus(self.calibration_log_slope[known[mask]])
+            bias = self.calibration_bias[known[mask]]
+            output[mask] = torch.sigmoid(bias + slope * latent[mask])
+        return output
+
+
 class TextFusionHead(nn.Module):
     """Project pooled vision/text features and predict one quality score."""
 

@@ -369,3 +369,161 @@ not useful conditioning.
 - [HyperIQA](https://openaccess.thecvf.com/content_CVPR_2020/html/Su_Blindly_Assess_Image_Quality_in_the_Wild_Guided_by_a_CVPR_2020_paper.html)
 - [INSTRUCTOR text embeddings](https://aclanthology.org/2023.findings-acl.71/)
 - [FollowIR instruction-use evaluation](https://aclanthology.org/2025.naacl-long.597/)
+
+## Performance-first follow-up experiments
+
+The original E0--E5 sequence establishes that a text branch can be trained and
+whether it reacts to prompt interventions. It does not, by itself, solve the
+larger problem exposed by the held-out evaluations: a model that is strong on
+KADID can still be weak on authentic and high-resolution test sets. The next
+experiments therefore optimize the training objective and dataset mixture
+first. All of them use CLIP-B/16, the same reference split, stretch
+preprocessing, five epochs, best-validation-epoch restoration, and the full
+held-out evaluation suite unless a row explicitly says otherwise.
+
+### P1 - Native CLIP interaction on the clean mixture
+
+Train the interaction head on KADID-10k + SPAQ + AIGCIQA2023, excluding PIPAL.
+Run seeds 0, 1, and 2, and pair these with clean-mixture image-only baselines
+for seeds 1 and 2 (seed 0 already exists). Evaluate TID2013, CSIQ, CID2013,
+KonIQ-10k, CLIVE, AGIQA-3K, GFIQA-20K, PIPAL, and the official UHD-IQA test
+split. Keep the current image-only clean mixture as the primary comparator.
+
+**Question:** does native CLIP text interaction improve the strongest current
+cross-dataset model, rather than only improving KADID validation?
+
+**Gate:** advance text conditioning only if the paired mean external SRCC
+improves without a collapse in the worst dataset or in zero/wrong-prompt
+interventions.
+
+### M1 - MDTVSFA-style dataset-scale alignment
+
+The current joint regression uses per-dataset min-max scores as if they had a
+shared perceptual origin. MDTVSFA identifies this as a source of cross-dataset
+conflict and instead learns a shared relative-quality representation followed
+by dataset-specific nonlinear scale alignment and dataset-aware losses
+([paper](https://arxiv.org/abs/2011.04263), [reference implementation](https://github.com/lidq92/MDTVSFA)).
+
+Adapt the idea to image IQA as follows:
+
+1. predict one shared latent quality value `z` from the frozen CLIP feature
+   (and, in the conditioned variant, the text feature);
+2. learn one monotonic calibration function per training dataset,
+   `y_hat_d = sigmoid(alpha_d + softplus(beta_d) * z)`, rather than applying
+   one global min-max scale;
+3. optimize calibrated SmoothL1 regression within each dataset;
+4. add a within-dataset pairwise ranking loss, including within-reference
+   ranking for synthetic distortions; and
+5. compare fixed equal dataset weighting with softmax weighting of the current
+   per-dataset losses, as used by MDTVSFA.
+
+The first M1 comparison excludes PIPAL. PIPAL is added only in M3 because its
+Elo-like labels are reliable for within-reference ordering but are not a
+shared absolute MOS scale. On unseen test datasets, report the shared latent
+score without an unavailable test-specific calibrator; optionally report a
+second number after fitting a calibrator on a clearly separated support split.
+
+**Question:** does learned dataset-scale alignment improve weak datasets without
+giving up the KADID/AGIQA gains?
+
+**Gate:** retain M1 only if external macro SRCC and the worst-dataset SRCC both
+improve over the clean-mixture baseline, or if it gives a clear reduction in
+between-dataset calibration error without hurting rank correlation.
+
+### M2 - Dataset-mixture and loss-weighting ablation
+
+Using the same shared head and seed protocol, compare:
+
+- KADID only;
+- KADID + authentic photographs (SPAQ);
+- KADID + generative images (AIGCIQA2023);
+- the full clean mixture;
+- proportional sampling;
+- equal dataset sampling (`by_dataset`); and
+- M1 adaptive softmax dataset-loss weighting.
+
+Do not select the mixture using test labels. Select using the validation macro
+SRCC, then report every held-out dataset and the mean/worst external metrics.
+
+**Question:** is the current `by_dataset` sampler the problem, or is the
+global target scale the problem?
+
+### M3 - PIPAL within-reference ranking extension
+
+Add PIPAL to the best M1/M2 configuration, but never train it as ordinary
+absolute regression. For pairs of images sharing a pristine reference, enforce
+the observed quality ordering with a logistic or margin ranking loss. Keep the
+absolute calibrated loss for KADID, SPAQ, and AIGCIQA2023. Report PIPAL
+within-reference SRCC separately and report the effect on every other external
+dataset.
+
+**Question:** can PIPAL contribute useful restoration-artifact ordering without
+miscalibrating the other datasets?
+
+### H1 - Quality-head capacity and conditioning architecture
+
+On the winning data objective, compare the current pooled MLP with a matched-
+parameter widened image-only MLP, interaction fusion, and a gated residual
+correction. Keep the CLIP-B representation fixed. Use the correct/zero/wrong/
+shuffled intervention matrix for conditioned heads.
+
+**Question:** are gains due to text semantics or simply additional head
+capacity?
+
+### E7 - External text encoders after objective stabilization
+
+Only after P1--M3, compare native CLIP text, INSTRUCTOR, and (resources
+permitting) Qwen embeddings on the same winning objective, prompts, seeds, and
+external test suite. Select by paired external performance plus semantic
+intervention behavior, not by KADID validation alone.
+
+### E8 - Semantic transfer and robustness finalist
+
+For the finalist, rerun held-out paraphrases, wrong and shuffled prompts, and
+leave-one-group-out blur/noise/compression transfer. Use five seeds and report
+paired confidence intervals. This is the final semantic claim, not a tuning
+criterion for P1--M3.
+
+## Execution record
+
+The performance-first runs were completed on 2026-09-01. Every external row
+below is a zero-retraining evaluation on all nine test datasets; UHD-IQA uses
+its official 900-image test split. The values are macro means of the nine
+per-dataset correlations, not pooled correlations.
+
+| run | MLflow source run | external SRCC | external PLCC |
+| --- | --- | ---: | ---: |
+| P1 clean interaction, seed 0 | `942bb6f9` | 0.6258 | 0.6645 |
+| P1 clean interaction, seed 1 | `68898ac1` | 0.6115 | 0.6561 |
+| P1 clean interaction, seed 2 | `cc3df954` | 0.6200 | 0.6503 |
+| P1 clean image-only, seed 1 | `b29f01c3` | 0.5780 | 0.6095 |
+| P1 clean image-only, seed 2 | `88c358b3` | 0.5980 | 0.6209 |
+| M1 calibrated image-only, equal loss | `18d3fb7d` | 0.5965 | 0.6194 |
+| M1 calibrated interaction | `7e322994` | 0.6238 | 0.6561 |
+| M2 calibrated image-only, softmax loss | `b8b3177d` | 0.5973 | 0.6174 |
+| M2 global regression, proportional sampling | `fe077cf6` | 0.5867 | 0.6064 |
+| M2 KADID + SPAQ | `d1d1bf3c` | 0.5741 | 0.5931 |
+| M2 KADID + AIGCIQA2023 | `580585be` | 0.5434 | 0.5562 |
+| M3 PIPAL within-reference ranking | `1d0ab6d5` | 0.5789 | 0.5999 |
+| H1 residual interaction head | `334e189f` | 0.5882 | 0.6139 |
+| E7 INSTRUCTOR interaction | `20c1b624` | 0.6112 | 0.6464 |
+
+P1 interaction averaged 0.6191 SRCC (standard deviation 0.0072) versus
+0.5880 (0.0142) for the two newly paired image-only seeds. The interaction
+gain is consistent, although it is not evidence that the condition is useful
+on every individual dataset.
+
+The E8 leave-one-group-out probes were run with the native interaction head.
+On blur, SRCC was 0.7471/0.7842 on TID2013/CSIQ versus 0.7988/0.7983 for the
+clean image-only comparator. On noise it was 0.5743/0.7025 versus
+0.6850/0.7493. On compression it was 0.7993/0.8693 versus 0.7977/0.8370.
+These are transfer diagnostics, not model-selection numbers; they show that
+semantic transfer is condition- and dataset-dependent.
+
+**Current conclusion:** P1 native CLIP interaction is the best tested
+performance configuration. M1 calibration is promising for the conditioned
+head but did not beat P1 on this first seed. PIPAL ranking-only training and
+the residual head did not improve the external macro. Keep the clean mixture
+and native interaction as the finalist, and treat five-seed confirmation and
+support-set calibration for unseen datasets as publication-grade follow-up
+rather than silently mixing calibrated and latent scores.

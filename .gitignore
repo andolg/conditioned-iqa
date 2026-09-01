@@ -44,6 +44,7 @@ all.csv
 !runs/**/*.pt
 *.npy
 *.log
+runs/feature_cache/
 
 # Local experiments: scratch scripts, notebooks, throwaway configs
 scratch*

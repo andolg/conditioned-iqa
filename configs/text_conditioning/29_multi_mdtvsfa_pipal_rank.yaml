@@ -1,0 +1,26 @@
+# M3: add PIPAL only through within-reference ranking.
+data: /home/sergey/conditioned-iqa/data/multi_train_mdtvsfa/labels.csv
+backbone: clip-base
+weights: /home/sergey/.cache/huggingface/hub/models--openai--clip-vit-base-patch16/snapshots/57c216476eefef5ab752ec549e440a49ae4ae5f3
+method: baseline
+preprocessing: stretch
+dataset_objective: mdtvsfa
+dataset_loss_weighting: mean
+ranking_weight: 0.05
+ranking_scope: reference
+pipal_ranking_only: true
+calibration_datasets: [aigciqa2023, kadid10k, pipal, spaq]
+epochs: 5
+batch_size: 32
+lr: 0.001
+hidden_dim: 256
+split: reference
+sampler: by_dataset
+workers: 4
+cache_features: true
+device: cuda:4
+seed: 0
+mlflow: true
+mlflow_experiment: conditioned-iqa-performance
+mlflow_run_name: m3-pipal-within-reference-rank-s0
+config_dir: runs/configs
