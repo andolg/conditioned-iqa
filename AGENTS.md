@@ -9,5 +9,13 @@
 - Mirror order is `alpha.hf-mirror.com`, `hf-mirror.com`, then the official Hub; `HF_ENDPOINT` overrides go first and all attempts share the Hub cache.
 - Use `download_data_mirrors.py` for IQA archives. Keep local `--weights` offline and preserve resumable downloads when changing endpoints.
 
-# Git
-- Always use `commit.sh` to to commit without changing global Git config.
+# Workflow
+- Check if you are running locally or on the `cn-server` machine (`whoami` and `hostname` return `sergey` and `amax`). If local, check the ssh-mcp section below.
+- Always use `commit.sh` when committing from the `cn-server` machine to commit without changing global Git config.
+
+# ssh-mcp
+
+- Use SSH target `cn-server`. Prefer the purpose-built `ssh-mcp` tools whenever working remotely instead of composing equivalent shell commands.
+- Use `ssh_view`, `ssh_glob`, and `ssh_grep` to inspect, find, and search remote files; use `ssh_create` and `ssh_edit` for remote file changes.
+- Use `ssh_exec` only for one-off commands that lack a dedicated tool. For interactive or long-running work, reuse a named session with `ssh_ensure_session` and manage it with the list/read/write/stop session tools.
+- Use `ssh_scp` or `ssh_sync` for transfers and `ssh_forward` plus the list/stop forward tools for port forwarding.
