@@ -11,11 +11,17 @@ import torch
 import yaml
 from torch.utils.data import DataLoader
 
-from result_reporting import ResultReporter, add_reporting_arguments, size_megabytes
+from result_reporting import (
+    ResultReporter,
+    add_reporting_arguments,
+    measure_flops,
+    measure_latency_memory,
+    size_megabytes,
+)
 from text_conditioning.data import ConditionedIQADataset
 from text_conditioning.models import ResidualTextHead, TextFusionHead
 from text_conditioning.text_encoder import load_frozen_text_encoder
-from train import BACKBONES, QualityMLP, load_backbone
+from train import BACKBONES, QualityMLP, embed, load_backbone
 from train_text_conditioned import PromptBank, evaluate
 
 
@@ -30,6 +36,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--method", choices=("baseline", "concat", "interaction", "residual"), default=None)
     parser.add_argument("--hidden-dim", type=int, default=None)
     parser.add_argument("--fusion-dim", type=int, default=None)
+    parser.add_argument("--epochs", type=int, default=None)
     parser.add_argument("--score-column", default="scaled_subjective_score")
     parser.add_argument("--batch-size", type=int, default=32)
     parser.add_argument("--workers", type=int, default=2)
@@ -135,6 +142,16 @@ def main() -> None:
     checkpoint = torch.load(checkpoint_path, map_location=device, weights_only=True)
     head.load_state_dict(checkpoint["head"])
     head.eval()
+    def forward_once():
+        features = embed(backbone, torch.randn(1, 3, image_size, image_size, device=device))
+        if args.method == "baseline":
+            return head(features)
+        return head(features, torch.randn(1, text_dim, device=device))
+
+    latency_p50_ms, latency_p95_ms, peak_memory_mb = measure_latency_memory(
+        forward_once, device
+    )
+    flops = measure_flops(forward_once)
     rows = []
     for data_path in args.data:
         family = "siglip" if args.backbone.startswith("siglip") else "clip"
@@ -155,6 +172,10 @@ def main() -> None:
                 "backbone": args.backbone,
                 "method": args.method,
                 "seed": args.seed if hasattr(args, "seed") else "",
+                "epochs": args.epochs if args.epochs is not None else "",
+                "latency_p50_ms": latency_p50_ms,
+                "latency_p95_ms": latency_p95_ms,
+                "peak_memory_mb": peak_memory_mb,
                 "images": value["n"],
                 "srcc": value["srcc"],
                 "plcc": value["plcc"],
@@ -174,6 +195,15 @@ def main() -> None:
                 f"test/{dataset_name}/plcc": value["plcc"],
                 f"system/{dataset_name}/images_per_second": images_per_second,
             })
+    mlflow.log_metrics({
+        "system/latency_p50_ms": latency_p50_ms,
+        "system/latency_p95_ms": latency_p95_ms,
+        "system/peak_memory_mb": peak_memory_mb,
+        "system/image_throughput": 1000 / latency_p50_ms if latency_p50_ms else 0,
+        "system/flops": flops,
+        "system/head_size_mb": size_megabytes(head),
+        "system/model_parameter_size_mb": size_megabytes(backbone) + size_megabytes(head),
+    })
     with tempfile.TemporaryDirectory() as directory:
         config_path = Path(directory) / "external_evaluation.yaml"
         with config_path.open("w", encoding="utf-8") as stream:

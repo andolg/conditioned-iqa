@@ -4,11 +4,13 @@ from __future__ import annotations
 
 import csv
 import json
+import math
 import os
+import time
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 RESULT_COLUMNS = (
     "timestamp_utc",
@@ -21,6 +23,10 @@ RESULT_COLUMNS = (
     "backbone",
     "method",
     "seed",
+    "epochs",
+    "latency_p50_ms",
+    "latency_p95_ms",
+    "peak_memory_mb",
     "images",
     "srcc",
     "plcc",
@@ -64,6 +70,76 @@ def size_megabytes(module) -> float:
     return sum(parameter.numel() * parameter.element_size() for parameter in module.parameters()) / 1024**2
 
 
+def percentile(values: list[float], fraction: float) -> float:
+    """Nearest-rank percentile for latency samples."""
+    if not values:
+        return math.nan
+    ordered = sorted(values)
+    index = min(len(ordered) - 1, max(0, math.ceil(fraction / 100 * len(ordered)) - 1))
+    return ordered[index]
+
+
+def measure_latency_memory(
+    forward: Callable[[], object],
+    device: object,
+    *,
+    warmup: int = 10,
+    repeats: int = 50,
+) -> tuple[float, float, float]:
+    """Measure inference latency percentiles and GPU peak memory.
+
+    ``forward`` must run one complete metric inference step (image -> score).
+    Latency is measured with CUDA events when available; peak memory is the
+    CUDA allocator peak observed after warmup and timed runs.
+    """
+    import torch
+
+    use_cuda = getattr(device, "type", "") == "cuda" and torch.cuda.is_available()
+    if use_cuda:
+        torch.cuda.synchronize(device)
+        torch.cuda.reset_peak_memory_stats(device)
+
+    for _ in range(warmup):
+        forward()
+    if use_cuda:
+        torch.cuda.synchronize(device)
+
+    samples: list[float] = []
+    for _ in range(repeats):
+        if use_cuda:
+            start = torch.cuda.Event(enable_timing=True)
+            end = torch.cuda.Event(enable_timing=True)
+            start.record()
+            forward()
+            end.record()
+            torch.cuda.synchronize(device)
+            samples.append(start.elapsed_time(end))
+        else:
+            start = time.perf_counter()
+            forward()
+            samples.append((time.perf_counter() - start) * 1000)
+
+    peak_memory_mb = (
+        torch.cuda.max_memory_allocated(device) / 1024**2 if use_cuda else math.nan
+    )
+    return (
+        round(percentile(samples, 50), 3),
+        round(percentile(samples, 95), 3),
+        round(peak_memory_mb, 1),
+    )
+
+
+def measure_flops(forward: Callable[[], object]) -> float:
+    """Return total FLOPs for one forward pass."""
+    import torch
+    from torch.utils.flop_counter import FlopCounterMode
+
+    with torch.no_grad():
+        with FlopCounterMode(display=False) as counter:
+            forward()
+    return float(counter.get_total_flops())
+
+
 @dataclass
 class ResultReporter:
     results_csv: Path
@@ -97,13 +173,26 @@ class ResultReporter:
         return result
 
     def _append_csv(self, rows: list[dict[str, Any]]) -> None:
+        import fcntl
+
         self.results_csv.parent.mkdir(parents=True, exist_ok=True)
-        has_header = self.results_csv.exists() and self.results_csv.stat().st_size > 0
-        with self.results_csv.open("a", newline="", encoding="utf-8") as stream:
-            writer = csv.DictWriter(stream, fieldnames=RESULT_COLUMNS, extrasaction="ignore")
-            if not has_header:
+        with self.results_csv.open("a+", newline="", encoding="utf-8") as stream:
+            fcntl.flock(stream.fileno(), fcntl.LOCK_EX)
+            try:
+                stream.seek(0)
+                existing: list[dict[str, Any]] = [
+                    self._normalize(row) for row in csv.DictReader(stream)
+                ]
+                stream.seek(0)
+                stream.truncate()
+                writer = csv.DictWriter(
+                    stream, fieldnames=RESULT_COLUMNS, extrasaction="ignore", lineterminator="\n"
+                )
                 writer.writeheader()
-            writer.writerows(rows)
+                writer.writerows(existing + rows)
+                stream.flush()
+            finally:
+                fcntl.flock(stream.fileno(), fcntl.LOCK_UN)
 
     def _append_google(self, rows: list[dict[str, Any]]) -> None:
         try:
@@ -126,8 +215,9 @@ class ResultReporter:
             worksheet = spreadsheet.worksheet(self.google_worksheet)
         except gspread.WorksheetNotFound:
             worksheet = spreadsheet.add_worksheet(title=self.google_worksheet, rows=1000, cols=len(RESULT_COLUMNS))
-        if not worksheet.row_values(1):
-            worksheet.append_row(list(RESULT_COLUMNS), value_input_option="RAW")
+        header = worksheet.row_values(1)
+        if header != list(RESULT_COLUMNS):
+            worksheet.update("A1", [list(RESULT_COLUMNS)], value_input_option="RAW")
         worksheet.append_rows(
             [[row[column] for column in RESULT_COLUMNS] for row in rows], value_input_option="USER_ENTERED"
         )

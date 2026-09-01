@@ -1,0 +1,22 @@
+# First joint-training baseline. Build this with build_joint_training_data.py
+# from KADID-10k, SPAQ, PIPAL, and AIGCIQA2023; do not include held-out sets.
+data: /home/sergey/conditioned-iqa/data/multi_train/labels.csv
+backbone: clip-large
+weights: /home/sergey/.cache/huggingface/hub/models--openai--clip-vit-large-patch14-336/snapshots/ce19dc912ca5cd21c8a653c79e251e808ccabcd1
+method: baseline
+epochs: 5
+batch_size: 32
+lr: 0.001
+hidden_dim: 256
+split: reference
+sampler: by_dataset
+workers: 4
+device: cuda:0
+seed: 0
+mlflow: true
+mlflow_tracking_uri: sqlite:///mlflow.db
+mlflow_experiment: conditioned-iqa-text-joint
+mlflow_run_name: joint-large-baseline-s0
+config_dir: runs/configs
+google_sheet_id: 1DZQKInig5PtctN23TXEkMzrdcc1uA9aATaxT3LTXYZY
+google_worksheet: Results
