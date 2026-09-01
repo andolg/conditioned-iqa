@@ -20,10 +20,15 @@ from __future__ import annotations
 
 import argparse
 import random
+import shlex
+import sys
+import tempfile
+from pathlib import Path
 
 import numpy as np
 import pandas as pd
 import torch
+import yaml
 from scipy import stats
 from torch import nn
 from torch.utils.data import DataLoader
@@ -116,7 +121,7 @@ def evaluate(backbone, head, loader, device) -> dict:
         per_dataset[name] = {
             "srcc": float(stats.spearmanr(group["p"], group["t"]).correlation),
             "plcc": float(stats.pearsonr(group["p"], group["t"]).statistic),
-            "n": int(len(group)),
+            "n": len(group),
         }
 
     per_reference = []
@@ -136,9 +141,116 @@ def evaluate(backbone, head, loader, device) -> dict:
     }
 
 
-def main() -> None:
+class MLflowTracker:
+    """Small opt-in wrapper that keeps the normal training path unchanged."""
+
+    def __init__(self, args: argparse.Namespace):
+        self.mlflow = None
+        self.args = args
+        if not args.mlflow:
+            return
+
+        import mlflow
+
+        mlflow.set_tracking_uri(args.mlflow_tracking_uri)
+        mlflow.set_experiment(args.mlflow_experiment)
+        mlflow.start_run(run_name=args.mlflow_run_name)
+        mlflow.set_tags({
+            "task": "conditioned-iqa",
+            "model_family": "frozen-vision-encoder",
+        })
+        mlflow.log_params({
+            "config": args.config if args.config is not None else "command-line",
+            "data": str(Path(args.data).expanduser()),
+            "backbone": args.backbone,
+            "epochs": args.epochs,
+            "batch_size": args.batch_size,
+            "learning_rate": args.lr,
+            "hidden_dim": args.hidden_dim,
+            "split": args.split,
+            "score_column": args.score_column,
+            "sampler": args.sampler,
+            "workers": args.workers,
+            "limit": args.limit if args.limit is not None else "none",
+            "device_requested": args.device,
+            "seed": args.seed,
+        })
+        self.mlflow = mlflow
+
+    def log_dataset(self, train_size: int, val_size: int, feature_dim: int,
+                    trainable_parameters: int, device: torch.device) -> None:
+        if self.mlflow is None:
+            return
+        self.mlflow.log_params({
+            "train_size": train_size,
+            "validation_size": val_size,
+            "feature_dim": feature_dim,
+            "trainable_parameters": trainable_parameters,
+            "device_used": str(device),
+        })
+        config = vars(self.args).copy()
+        config.update({
+            "mlflow_run_id": self.mlflow.active_run().info.run_id,
+            "command": shlex.join(sys.argv),
+            "train_size": train_size,
+            "validation_size": val_size,
+            "feature_dim": feature_dim,
+            "trainable_parameters": trainable_parameters,
+            "device_used": str(device),
+        })
+        config_dir = Path(self.args.config_dir).expanduser()
+        config_dir.mkdir(parents=True, exist_ok=True)
+        config_path = config_dir / f"{config['mlflow_run_id']}.yaml"
+        with config_path.open("w", encoding="utf-8") as stream:
+            yaml.safe_dump(config, stream, sort_keys=True, allow_unicode=True)
+        self.mlflow.log_artifact(str(config_path), artifact_path="configs")
+
+    def log_train_step(self, loss: float, step: int) -> None:
+        if self.mlflow is None:
+            return
+        self.mlflow.log_metric("train/loss", loss, step=step)
+
+    def log_epoch(self, epoch: int, loss: float, scores: dict) -> None:
+        if self.mlflow is None:
+            return
+        metrics = {"train/epoch": float(epoch + 1), "train/epoch_loss": loss}
+        for name, row in scores["per_dataset"].items():
+            metrics[f"validation/{name}/srcc"] = row["srcc"]
+            metrics[f"validation/{name}/plcc"] = row["plcc"]
+        for key in ("macro_srcc", "macro_plcc", "worst_srcc", "srcc_per_reference"):
+            if scores[key] is not None:
+                metrics[f"validation/{key}"] = scores[key]
+        self.mlflow.log_metrics(
+            {name: value for name, value in metrics.items() if np.isfinite(value)},
+            step=epoch,
+        )
+        if scores["worst_dataset"] is not None:
+            self.mlflow.set_tag("latest_worst_dataset", scores["worst_dataset"])
+
+    def log_checkpoint(self, head: nn.Module, args: argparse.Namespace,
+                       feature_dim: int) -> None:
+        if self.mlflow is None:
+            return
+        checkpoint = {
+            "head": head.state_dict(),
+            "backbone": args.backbone,
+            "feature_dim": feature_dim,
+        }
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "quality_head.pt"
+            torch.save(checkpoint, path)
+            self.mlflow.log_artifact(str(path), artifact_path="checkpoints")
+
+    def close(self, status: str = "FINISHED") -> None:
+        if self.mlflow is not None:
+            self.mlflow.end_run(status=status)
+
+
+def build_parser() -> argparse.ArgumentParser:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--data", required=True, help="the CSV prepare_data.py wrote")
+    ap.add_argument("--config", default=None,
+                    help="YAML file whose values become CLI defaults")
+    ap.add_argument("--data", default=None, help="the CSV prepare_data.py wrote")
     ap.add_argument("--backbone", default="clip-base", choices=sorted(BACKBONES))
     ap.add_argument("--weights", default=None, help="local checkpoint directory, if not the hub")
     ap.add_argument("--epochs", type=int, default=5)
@@ -156,7 +268,39 @@ def main() -> None:
     ap.add_argument("--device", default="auto")
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--out", default=None, help="save the trained head here")
-    args = ap.parse_args()
+    ap.add_argument("--mlflow", action="store_true", help="track this run with MLflow")
+    ap.add_argument("--mlflow-tracking-uri", default="sqlite:///mlflow.db",
+                    help="MLflow tracking URI (default: local sqlite:///mlflow.db)")
+    ap.add_argument("--mlflow-experiment", default="conditioned-iqa",
+                    help="MLflow experiment name")
+    ap.add_argument("--mlflow-run-name", default=None, help="optional MLflow run name")
+    ap.add_argument("--config-dir", default="runs/configs",
+                    help="directory for per-run YAML configurations")
+    return ap
+
+
+def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
+    argv = sys.argv[1:] if argv is None else argv
+    bootstrap = argparse.ArgumentParser(add_help=False)
+    bootstrap.add_argument("--config")
+    initial, _ = bootstrap.parse_known_args(argv)
+    ap = build_parser()
+    if initial.config:
+        config_path = Path(initial.config).expanduser()
+        with config_path.open(encoding="utf-8") as stream:
+            values = yaml.safe_load(stream) or {}
+        if not isinstance(values, dict):
+            ap.error(f"config must contain a YAML mapping: {config_path}")
+        valid = {action.dest for action in ap._actions}
+        ap.set_defaults(**{key: value for key, value in values.items() if key in valid})
+    args = ap.parse_args(argv)
+    if args.data is None:
+        ap.error("--data is required, either on the command line or in --config")
+    return args
+
+
+def main() -> None:
+    args = parse_args()
 
     random.seed(args.seed)
     np.random.seed(args.seed)
@@ -199,34 +343,52 @@ def main() -> None:
           f"(split by {args.split}, sampling {args.sampler})")
     print(f"{sum(p.numel() for p in head.parameters()):,} trainable parameters "
           "— the backbone is frozen")
+    tracker = MLflowTracker(args)
 
-    for epoch in range(args.epochs):
-        losses = []
-        for batch in train_loader:
-            print(f"epoch {epoch} batch {len(losses)} of {len(train_loader)}; device: {device}", flush=True)
-            features = embed(backbone, batch["image"].to(device))
-            loss = loss_fn(head(features), batch["target"].to(device))
-            optimizer.zero_grad()
-            loss.backward()
-            optimizer.step()
-            losses.append(float(loss.detach()))
-        scores = evaluate(backbone, head, val_loader, device)
-        print(f"epoch {epoch}: loss {np.mean(losses):.4f}", flush=True)
-        for name, row in sorted(scores["per_dataset"].items()):
-            print(f"    {name:<14s} n {row['n']:>6d}   "
-                  f"SRCC {row['srcc']:.4f}   PLCC {row['plcc']:.4f}")
-        if len(scores["per_dataset"]) > 1:
-            print(f"    {'macro':<14s} {'':>8s}   SRCC {scores['macro_srcc']:.4f}   "
-                  f"PLCC {scores['macro_plcc']:.4f}   "
-                  f"worst {scores['worst_srcc']:.4f} on {scores['worst_dataset']}")
-        if scores["srcc_per_reference"] is not None:
-            print(f"    {'within-ref':<14s} {'':>8s}   SRCC {scores['srcc_per_reference']:.4f}"
-                  f"   ({scores['n_references']} references)")
+    try:
+        tracker.log_dataset(
+            len(train_set), len(val_set), feature_dim,
+            sum(p.numel() for p in head.parameters()), device,
+        )
+        global_step = 0
+        for epoch in range(args.epochs):
+            losses = []
+            for batch in train_loader:
+                print(f"epoch {epoch} batch {len(losses)} of {len(train_loader)}; device: {device}", flush=True)
+                features = embed(backbone, batch["image"].to(device))
+                loss = loss_fn(head(features), batch["target"].to(device))
+                optimizer.zero_grad()
+                loss.backward()
+                optimizer.step()
+                batch_loss = float(loss.detach())
+                losses.append(batch_loss)
+                tracker.log_train_step(batch_loss, global_step)
+                global_step += 1
+            scores = evaluate(backbone, head, val_loader, device)
+            epoch_loss = float(np.mean(losses))
+            tracker.log_epoch(epoch, epoch_loss, scores)
+            print(f"epoch {epoch}: loss {epoch_loss:.4f}", flush=True)
+            for name, row in sorted(scores["per_dataset"].items()):
+                print(f"    {name:<14s} n {row['n']:>6d}   "
+                      f"SRCC {row['srcc']:.4f}   PLCC {row['plcc']:.4f}")
+            if len(scores["per_dataset"]) > 1:
+                print(f"    {'macro':<14s} {'':>8s}   SRCC {scores['macro_srcc']:.4f}   "
+                      f"PLCC {scores['macro_plcc']:.4f}   "
+                      f"worst {scores['worst_srcc']:.4f} on {scores['worst_dataset']}")
+            if scores["srcc_per_reference"] is not None:
+                print(f"    {'within-ref':<14s} {'':>8s}   SRCC {scores['srcc_per_reference']:.4f}"
+                      f"   ({scores['n_references']} references)")
 
-    if args.out:
-        torch.save({"head": head.state_dict(), "backbone": args.backbone,
-                    "feature_dim": feature_dim}, args.out)
-        print(f"saved -> {args.out}")
+        tracker.log_checkpoint(head, args, feature_dim)
+        if args.out:
+            torch.save({"head": head.state_dict(), "backbone": args.backbone,
+                        "feature_dim": feature_dim}, args.out)
+            print(f"saved -> {args.out}")
+    except Exception:
+        tracker.close("FAILED")
+        raise
+    else:
+        tracker.close()
 
 
 if __name__ == "__main__":

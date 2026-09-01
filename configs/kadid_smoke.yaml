@@ -1,0 +1,20 @@
+# Small real-data run for checking the complete training and MLflow pipeline.
+data: ~/conditioned-iqa/data/kadid10k/labels.csv
+backbone: clip-base
+weights: null
+epochs: 1
+batch_size: 32
+lr: 0.001
+hidden_dim: 256
+split: reference
+score_column: scaled_subjective_score
+sampler: random
+workers: 2
+limit: 64
+device: auto
+seed: 0
+mlflow: true
+mlflow_tracking_uri: sqlite:///mlflow.db
+mlflow_experiment: conditioned-iqa-smoke
+mlflow_run_name: yaml-kadid-64
+config_dir: runs/configs
