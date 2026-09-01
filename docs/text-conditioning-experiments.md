@@ -527,3 +527,192 @@ the residual head did not improve the external macro. Keep the clean mixture
 and native interaction as the finalist, and treat five-seed confirmation and
 support-set calibration for unseen datasets as publication-grade follow-up
 rather than silently mixing calibrated and latent scores.
+
+## Detailed results and interpretation
+
+The macro table above is useful for model selection, but it hides which test
+sets move. The following breakdown uses the same zero-retraining external
+evaluations. SRCC is the primary IQA ranking metric; the complete SRCC/PLCC
+rows, sample counts, latency, and MLflow IDs remain in `runs/results.csv`.
+
+### P1: clean-mixture native CLIP interaction
+
+The P1 interaction head was trained on 18,945 images and selected on 4,705
+reference-held-out images. It has 529,409 trainable parameters. The selected
+epochs and validation scores were:
+
+| seed | selected epoch | validation SRCC | validation PLCC | worst validation SRCC |
+| ---: | ---: | ---: | ---: | ---: |
+| 0 | 1 | 0.8335 | 0.8519 | 0.7704 |
+| 1 | 2 | 0.8458 | 0.8503 | 0.7905 |
+| 2 | 1 | 0.8317 | 0.8343 | 0.7631 |
+
+The prompt interventions on the selected checkpoints show that the head did
+not simply ignore text. In seed 0, for example, macro validation SRCC was
+0.8335 with the correct prompt, 0.8294 with a held-out paraphrase, 0.7896
+with a generic prompt, 0.7667 with the wrong family, 0.7571 after shuffling
+conditions, and 0.5169 with zero text. The corresponding values for seeds 1
+and 2 were correct/held-out/wrong/shuffled/zero =
+`0.8458/0.8405/0.7756/0.7578/0.3303` and
+`0.8317/0.8252/0.7697/0.7466/0.7009`.
+
+The three-seed external SRCC means make the transfer pattern clearer:
+
+| held-out dataset | interaction | image-only baseline | difference |
+| --- | ---: | ---: | ---: |
+| AGIQA-3K | 0.7187 | 0.7027 | +0.0160 |
+| CID2013 | 0.6283 | 0.6230 | +0.0053 |
+| CLIVE | 0.7411 | 0.7007 | +0.0404 |
+| CSIQ | 0.8232 | 0.7867 | +0.0365 |
+| GFIQA-20K | 0.6686 | 0.6552 | +0.0134 |
+| KonIQ-10k | 0.6308 | 0.5785 | +0.0523 |
+| PIPAL | 0.4334 | 0.4422 | -0.0088 |
+| TID2013 | 0.6677 | 0.7213 | -0.0536 |
+| UHD-IQA | 0.2601 | 0.1723 | +0.0878 |
+| **macro mean** | **0.6191** | **0.5954** | **+0.0237** |
+
+The interaction gain is therefore real in the aggregate, but it is not a
+uniform distortion-family transfer result: TID2013 and PIPAL decline, while
+the largest numerical gain is on the authentic UHD-IQA set, where both models
+are still weak. Also, the interaction head is not capacity matched to the
+baseline (529,409 versus 198,657 parameters), so this table cannot isolate a
+semantic-text gain.
+
+### M1: MDTVSFA-style scale alignment
+
+M1 adds a shared latent score and a monotonic, learned calibration per training
+dataset, with equal per-dataset regression losses and a within-dataset ranking
+term. The image-only run selected epoch 4 (`0.8269` validation SRCC,
+`0.8326` PLCC) and reached external `0.5965/0.6194` SRCC/PLCC. Its strongest
+per-dataset SRCCs were AGIQA-3K `0.7146`, CID2013 `0.6317`, CSIQ `0.7615`, and
+PIPAL `0.4508`; it reduced CSIQ and authentic-dataset transfer relative to P1.
+
+The conditioned M1 run selected epoch 1 (`0.8407/0.8558` validation
+SRCC/PLCC) and reached external `0.6238/0.6561`. Its per-dataset SRCCs were:
+
+```text
+AGIQA 0.6993  CID2013 0.6999  CLIVE 0.7311  CSIQ 0.8307
+GFIQA 0.6691  KonIQ 0.6112  PIPAL 0.4071  TID2013 0.6755  UHD 0.2901
+```
+
+This is close to P1, but it is only one seed. More importantly, the external
+datasets do not have learned calibrators: evaluation falls back to the shared
+latent score. Because the calibration is monotonic, it cannot change an
+unseen-dataset SRCC directly. Thus this run tests whether calibration changes
+the learned representation indirectly, not whether calibrated external MOS
+values are solved.
+
+### M2: dataset mixtures and loss weighting
+
+The ablations were image-only controls, so they ask whether the data objective
+helps independently of text:
+
+| variant | train/validation images | selected epoch | validation SRCC | external SRCC/PLCC | result |
+| --- | ---: | ---: | ---: | ---: | --- |
+| full clean mixture, global proportional | 18,945/4,705 | 2 | 0.8194 | 0.5867/0.6064 | worse than equal dataset sampling |
+| KADID + SPAQ | 17,025/4,225 | 1 | 0.8231 | 0.5741/0.5931 | authentic data alone did not transfer |
+| KADID + AIGCIQA | 10,045/2,480 | 4 | 0.7841 | 0.5434/0.5562 | weakest mixture |
+| calibrated full mixture, softmax loss | 18,945/4,705 | 4 | 0.8300 | 0.5973/0.6174 | small calibration gain, still below P1 |
+
+The full proportional run had SRCC `0.6918/0.5996/0.7061/0.7730/0.6501/
+0.5539/0.4384/0.6930/0.1743` on AGIQA-3K/CID2013/CLIVE/CSIQ/GFIQA/KonIQ/
+PIPAL/TID2013/UHD. The KADID+SPAQ run was `0.6888/0.5337/0.7056/0.8001/
+0.5874/0.5565/0.4288/0.6719/0.1941`; KADID+AIGCIQA was
+`0.7144/0.5056/0.5681/0.7532/0.5837/0.4896/0.4046/0.6647/0.2068`.
+The mixture choice clearly matters, but none of these one-seed controls
+establishes a generally best training distribution.
+
+### M3: PIPAL within-reference ranking
+
+M3 used 33,185 training and 8,265 validation images, excluded PIPAL from
+absolute regression, and added within-reference ranking. It selected epoch 3
+with validation SRCC/PLCC `0.7408/0.7435`, far below the clean-mixture
+controls. External SRCC/PLCC was `0.5789/0.5999`.
+
+PIPAL SRCC rose slightly to `0.4538`, compared with about `0.4334` for the P1
+interaction mean, but the other datasets fell: CID2013 `0.5359`, CLIVE
+`0.6748`, GFIQA `0.6152`, TID2013 `0.6482`, and UHD-IQA `0.2243`. The ranking
+loss therefore improved the one metric it was designed to target only
+slightly, while damaging cross-dataset transfer. It also operates on pairs
+that happen to share a reference within a mini-batch, so its effective signal
+is sparse under random batch composition.
+
+### H1: residual conditioning head
+
+H1 used condition dropout (`0.15`) and a residual correction so zero text has
+an explicit image-only path. It selected epoch 4 with validation
+SRCC/PLCC `0.8298/0.8293` and had 728,066 trainable parameters. External
+SRCC/PLCC was `0.5882/0.6139`, below P1 and nearly at the image-only level.
+
+Its intervention scores were correct `0.8298`, held-out paraphrase `0.8261`,
+generic `0.8128`, wrong `0.8058`, shuffled `0.8015`, and zero `0.8179`.
+The narrow spread means the residual model mostly learned a strong visual
+score and made only a small condition-dependent correction. This is useful as
+a fallback design, but not evidence that residual text improves transfer.
+
+### E7: INSTRUCTOR text encoder
+
+E7 replaced the native CLIP text tower with frozen INSTRUCTOR while keeping
+the CLIP-B image encoder, clean mixture, interaction fusion, and training
+budget fixed. It selected epoch 2 with validation SRCC/PLCC `0.8288/0.8441`,
+used 595,457 trainable head parameters, and reached external `0.6112/0.6464`.
+Per-dataset SRCC was AGIQA-3K `0.6897`, CID2013 `0.6567`, CLIVE `0.7372`, CSIQ
+`0.8165`, GFIQA `0.6760`, KonIQ `0.6321`, PIPAL `0.4135`, TID2013 `0.6175`,
+and UHD-IQA `0.2616`.
+
+The interventions were correct `0.8288`, held-out `0.8304`, generic `0.8100`,
+wrong `0.7523`, shuffled `0.7582`, and zero `0.3531`. INSTRUCTOR therefore
+retained prompt sensitivity but did not beat the native CLIP interaction mean
+(`0.6191/0.6570`). This suggests that better general-purpose sentence
+similarity is not enough when the frozen visual representation is the limiting
+factor.
+
+### E8: leave-one-group-out semantic transfer
+
+E8 excluded one KADID group at a time, then evaluated the corresponding group
+in TID2013 and CSIQ. These were one-seed diagnostic probes, not five-seed
+finalist estimates:
+
+| group excluded from training | train/validation images | selected epoch | validation SRCC | TID2013 SRCC | CSIQ SRCC | clean image-only comparator |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| blur | 17,970/4,465 | 2 | 0.8273 | 0.7471 | 0.7842 | 0.7988/0.7983 |
+| noise | 17,320/4,305 | 2 | 0.8406 | 0.5743 | 0.7025 | 0.6850/0.7493 |
+| compression | 18,295/4,545 | 4 | 0.8271 | 0.7993 | 0.8693 | 0.7977/0.8370 |
+
+Leaving out blur hurt TID2013 and leaving out noise hurt both test sets, while
+leaving out compression improved both slightly. The result is not a stable
+zero-shot semantic advantage. The held-out prompt is a new vector to a head
+trained on the other seven vectors, and the pooled CLIP feature still has to
+detect the relevant low-level artifact; the text alone cannot perform that
+extrapolation.
+
+### Original E0--E4 pilot
+
+The initial KADID pilot is reported in detail in
+[text-conditioning-pilot-results.md](text-conditioning-pilot-results.md). Its
+results establish the narrower in-domain claim:
+
+| pilot | mean KADID validation SRCC | interpretation |
+| --- | ---: | --- |
+| E0 image-only baseline | 0.7599 | reference control |
+| E1 plain concatenation | 0.7648 | inconsistent, small gain |
+| E2 interaction `[v,t,v*t]` | 0.7847 | strongest pooled head in-domain |
+| E2 residual correction | 0.7753 | useful fallback, smaller gain |
+| E4 held-out paraphrase | 0.7752 | retains most canonical performance |
+
+The canonical interaction score was `0.7861`; generic, wrong, and shuffled
+conditions were `0.7265`, `0.7269`, and `0.7190`. E0--E4 therefore show that
+the model can react to prompt meaning on KADID, but they do not establish
+cross-dataset quality transfer. E6 (integration with a separate learned-query
+scorer) was intentionally not run because that architecture belongs to a
+separate workstream.
+
+### Overall reading
+
+Taken together, the experiments answer two different questions. The first is
+positive: a frozen text vector changes the KADID score in a prompt-dependent
+way, and native CLIP interaction gives a modest aggregate external gain. The
+second is negative: changing the fusion head, text encoder, dataset loss, or
+PIPAL objective does not solve the weak UHD-IQA/PIPAL/authentic transfer.
+The next comparison must therefore target the image representation and use a
+matched-capacity control before making a stronger semantic-conditioning claim.
