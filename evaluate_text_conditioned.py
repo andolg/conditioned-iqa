@@ -1,0 +1,192 @@
+"""Score a completed image-only or text-conditioned checkpoint on held-out IQA data."""
+
+from __future__ import annotations
+
+import argparse
+import sys
+import tempfile
+from pathlib import Path
+
+import torch
+import yaml
+from torch.utils.data import DataLoader
+
+from result_reporting import ResultReporter, add_reporting_arguments, size_megabytes
+from text_conditioning.data import ConditionedIQADataset
+from text_conditioning.models import ResidualTextHead, TextFusionHead
+from text_conditioning.text_encoder import load_frozen_text_encoder
+from train import BACKBONES, QualityMLP, load_backbone
+from train_text_conditioned import PromptBank, evaluate
+
+
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--config", default=None, help="optional evaluation YAML")
+    parser.add_argument("--source-run-id", required=True, help="MLflow run containing checkpoint/config artifacts")
+    parser.add_argument("--data", nargs="+", required=True, help="prepared held-out labels.csv files")
+    parser.add_argument("--backbone", choices=sorted(BACKBONES), default=None)
+    parser.add_argument("--weights", default=None)
+    parser.add_argument("--text-weights", default=None)
+    parser.add_argument("--method", choices=("baseline", "concat", "interaction", "residual"), default=None)
+    parser.add_argument("--hidden-dim", type=int, default=None)
+    parser.add_argument("--fusion-dim", type=int, default=None)
+    parser.add_argument("--score-column", default="scaled_subjective_score")
+    parser.add_argument("--batch-size", type=int, default=32)
+    parser.add_argument("--workers", type=int, default=2)
+    parser.add_argument("--device", default="auto")
+    parser.add_argument("--mlflow-tracking-uri", default="sqlite:///mlflow.db")
+    parser.add_argument("--mlflow-experiment", default="conditioned-iqa-external-eval")
+    parser.add_argument("--mlflow-run-name", default=None)
+    add_reporting_arguments(parser)
+    return parser
+
+
+def source_defaults(run_id: str, tracking_uri: str) -> tuple[dict, Path, str]:
+    """Download the source manifest and head artifact from MLflow."""
+    from mlflow.tracking import MlflowClient
+
+    client = MlflowClient(tracking_uri)
+    run = client.get_run(run_id)
+    config_path = Path(client.download_artifacts(run_id, f"configs/{run_id}.yaml"))
+    checkpoint_path = Path(client.download_artifacts(run_id, "checkpoints/quality_head.pt"))
+    with config_path.open(encoding="utf-8") as stream:
+        defaults = yaml.safe_load(stream) or {}
+    return defaults, checkpoint_path, run.data.tags.get("mlflow.runName", "")
+
+
+def parse_args() -> tuple[argparse.Namespace, Path, str]:
+    bootstrap = argparse.ArgumentParser(add_help=False)
+    bootstrap.add_argument("--config")
+    bootstrap.add_argument("--source-run-id", required=True)
+    bootstrap.add_argument("--mlflow-tracking-uri", default="sqlite:///mlflow.db")
+    bootstrap_args, _ = bootstrap.parse_known_args()
+    defaults, checkpoint_path, source_name = source_defaults(
+        bootstrap_args.source_run_id, bootstrap_args.mlflow_tracking_uri
+    )
+    parser = build_parser()
+    if bootstrap_args.config:
+        with Path(bootstrap_args.config).open(encoding="utf-8") as stream:
+            defaults.update(yaml.safe_load(stream) or {})
+    # Source manifests describe training.  They must not silently redirect a
+    # new test run's data, MLflow experiment, or results destination.
+    for key in (
+        "data",
+        "mlflow_experiment",
+        "mlflow_run_name",
+        "results_csv",
+        "google_sheet_id",
+        "google_worksheet",
+        "google_service_account_file",
+        "google_service_account_json",
+    ):
+        defaults.pop(key, None)
+    valid = {action.dest for action in parser._actions}
+    parser.set_defaults(**{key: value for key, value in defaults.items() if key in valid})
+    return parser.parse_args(), checkpoint_path, source_name
+
+
+def build_head(args, vision_dim: int, text_dim: int | None, device: torch.device):
+    if args.method == "baseline":
+        return QualityMLP(vision_dim, args.hidden_dim).to(device)
+    if args.method == "residual":
+        return ResidualTextHead(vision_dim, text_dim, args.fusion_dim, args.hidden_dim).to(device)
+    return TextFusionHead(
+        vision_dim, text_dim, args.fusion_dim, args.hidden_dim, args.method == "interaction"
+    ).to(device)
+
+
+def safe_args(args) -> dict:
+    values = vars(args).copy()
+    if values.get("google_service_account_json"):
+        values["google_service_account_json"] = "<redacted>"
+    return values
+
+
+def main() -> None:
+    args, checkpoint_path, source_name = parse_args()
+    required = ("backbone", "weights", "method", "hidden_dim")
+    missing = [name for name in required if getattr(args, name) is None]
+    if missing:
+        raise ValueError(f"source run manifest lacks required settings: {', '.join(missing)}")
+    import mlflow
+
+    # Start before model loading/inference so a long external benchmark is
+    # visible as RUNNING in the UI and fills in one dataset at a time.
+    mlflow.set_tracking_uri(args.mlflow_tracking_uri)
+    mlflow.set_experiment(args.mlflow_experiment)
+    evaluation_run_name = args.mlflow_run_name or f"external-{source_name}"
+    run = mlflow.start_run(run_name=evaluation_run_name)
+    mlflow.log_params({key: str(value) for key, value in safe_args(args).items()})
+    mlflow.set_tag("source_run_id", args.source_run_id)
+    device = torch.device(args.device if args.device != "auto" else "cuda" if torch.cuda.is_available() else "cpu")
+    backbone, image_size, vision_dim = load_backbone(args.backbone, args.weights, device)
+    prompts = None
+    text_dim = None
+    if args.method != "baseline":
+        model_id = BACKBONES[args.backbone][0]
+        tokenizer, text_encoder, text_dim = load_frozen_text_encoder(
+            model_id, args.text_weights or args.weights, device
+        )
+        prompts = PromptBank(tokenizer, text_encoder, device)
+        del text_encoder
+        if device.type == "cuda":
+            torch.cuda.empty_cache()
+    head = build_head(args, vision_dim, text_dim, device)
+    checkpoint = torch.load(checkpoint_path, map_location=device, weights_only=True)
+    head.load_state_dict(checkpoint["head"])
+    head.eval()
+    rows = []
+    for data_path in args.data:
+        family = "siglip" if args.backbone.startswith("siglip") else "clip"
+        dataset = ConditionedIQADataset(
+            data_path, image_size=image_size, backbone=family, score_column=args.score_column
+        )
+        loader = DataLoader(dataset, batch_size=args.batch_size, num_workers=args.workers)
+        scores = evaluate(backbone, head, loader, device, prompts)
+        images_per_second = scores["images"] / scores["elapsed_seconds"]
+        for dataset_name, value in scores["per_dataset"].items():
+            rows.append({
+                "run_id": run.info.run_id,
+                "source_run_id": args.source_run_id,
+                "experiment": args.mlflow_experiment,
+                "run_name": evaluation_run_name,
+                "evaluation": "held_out_test",
+                "dataset": dataset_name,
+                "backbone": args.backbone,
+                "method": args.method,
+                "seed": args.seed if hasattr(args, "seed") else "",
+                "images": value["n"],
+                "srcc": value["srcc"],
+                "plcc": value["plcc"],
+                "srcc_per_reference": scores["srcc_per_reference"],
+                "images_per_second": images_per_second,
+                "milliseconds_per_image": 1000 / images_per_second,
+                "head_size_mb": size_megabytes(head),
+                "model_parameter_size_mb": size_megabytes(backbone) + size_megabytes(head),
+                "config_path": args.config or f"mlflow:{args.source_run_id}",
+            })
+            print(
+                f"{dataset_name}: SRCC {value['srcc']:.4f} PLCC {value['plcc']:.4f}; "
+                f"{images_per_second:.1f} images/s"
+            )
+            mlflow.log_metrics({
+                f"test/{dataset_name}/srcc": value["srcc"],
+                f"test/{dataset_name}/plcc": value["plcc"],
+                f"system/{dataset_name}/images_per_second": images_per_second,
+            })
+    with tempfile.TemporaryDirectory() as directory:
+        config_path = Path(directory) / "external_evaluation.yaml"
+        with config_path.open("w", encoding="utf-8") as stream:
+            yaml.safe_dump(safe_args(args), stream, sort_keys=True)
+        mlflow.log_artifact(str(config_path), artifact_path="configs")
+    reporter = ResultReporter.from_args(args)
+    try:
+        reporter.append(rows)
+    except RuntimeError as error:
+        print(f"results-table export failed after local save: {error}", file=sys.stderr)
+        mlflow.set_tag("results_export_error", str(error))
+    mlflow.end_run()
+
+
+if __name__ == "__main__":
+    main()

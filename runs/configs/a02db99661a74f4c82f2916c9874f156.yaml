@@ -1,0 +1,34 @@
+backbone: clip-large
+batch_size: 32
+command: train_text_conditioned.py --data /home/sergey/conditioned-iqa/data/kadid10k/labels.csv
+  --backbone clip-large --weights /home/sergey/.cache/huggingface/hub/models--openai--clip-vit-large-patch14-336/snapshots/ce19dc912ca5cd21c8a653c79e251e808ccabcd1
+  --method baseline --epochs 5 --batch-size 32 --workers 2 --device cuda:5 --seed
+  0 --mlflow --mlflow-experiment conditioned-iqa-text-large --mlflow-run-name tc-large-baseline-s0
+config: null
+config_dir: runs/configs
+data: /home/sergey/conditioned-iqa/data/kadid10k/labels.csv
+device: cuda:5
+device_used: cuda:5
+epochs: 5
+feature_dim: 1024
+fusion_dim: 256
+hidden_dim: 256
+limit: null
+lr: 0.001
+method: baseline
+mlflow: true
+mlflow_experiment: conditioned-iqa-text-large
+mlflow_run_id: a02db99661a74f4c82f2916c9874f156
+mlflow_run_name: tc-large-baseline-s0
+mlflow_tracking_uri: sqlite:///mlflow.db
+out: null
+sampler: random
+score_column: scaled_subjective_score
+seed: 0
+split: reference
+text_weights: null
+train_size: 8125
+trainable_parameters: 264705
+validation_size: 2000
+weights: /home/sergey/.cache/huggingface/hub/models--openai--clip-vit-large-patch14-336/snapshots/ce19dc912ca5cd21c8a653c79e251e808ccabcd1
+workers: 2

@@ -189,6 +189,10 @@ class MLflowTracker:
             "device_used": str(device),
         })
         config = vars(self.args).copy()
+        # A run manifest must be shareable.  Credential JSON may be supplied
+        # through an environment variable for optional Google Sheets export.
+        if config.get("google_service_account_json"):
+            config["google_service_account_json"] = "<redacted>"
         config.update({
             "mlflow_run_id": self.mlflow.active_run().info.run_id,
             "command": shlex.join(sys.argv),

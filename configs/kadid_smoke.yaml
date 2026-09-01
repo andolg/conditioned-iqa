@@ -18,3 +18,5 @@ mlflow_tracking_uri: sqlite:///mlflow.db
 mlflow_experiment: conditioned-iqa-smoke
 mlflow_run_name: yaml-kadid-64
 config_dir: runs/configs
+google_sheet_id: 1DZQKInig5PtctN23TXEkMzrdcc1uA9aATaxT3LTXYZY
+google_worksheet: Results

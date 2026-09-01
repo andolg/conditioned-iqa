@@ -13,6 +13,27 @@
 - Check if you are running locally or on the `cn-server` machine (`whoami` and `hostname` return `sergey` and `amax`). If local, check the ssh-mcp section below.
 - Always use `commit.sh` when committing from the `cn-server` machine to commit without changing global Git config.
 
+# Parallel feature work
+
+- Keep text-conditioning functionality separate from the baseline `train.py`.
+  Implement it in `train_text_conditioned.py`, `text_conditioning/`, and
+  `configs/text_conditioning/`; do not add text-conditioning flags, models, or
+  training branches to `train.py`. Several colleagues and agents develop other
+  features concurrently, so the baseline must remain a stable comparison and a
+  low-conflict integration point.
+- Do not implement learned-label conditioning in the text-conditioning
+  workstream. Other colleagues own that feature. Consume their reported results
+  as a comparison when available, without copying their implementation into the
+  text-conditioning branch.
+- Keep learned-query/patch-attention architectures out of the initial
+  text-conditioning implementation as well. The project brief treats learned
+  queries as a separate research direction. Text conditioning should first keep
+  the baseline pooled vision representation fixed; integrate with a colleague's
+  stable query scorer later in a separate follow-up if needed.
+- Read `docs/text-conditioning-experiments.md` before implementing or running a
+  text-conditioning experiment. Preserve its baseline-parity gate, intervention
+  controls, MLflow naming, and China/offline Hugging Face requirements.
+
 # ssh-mcp
 
 - Use SSH target `cn-server`. Prefer the purpose-built `ssh-mcp` tools whenever working remotely instead of composing equivalent shell commands.
