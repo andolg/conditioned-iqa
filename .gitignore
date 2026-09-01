@@ -19,6 +19,9 @@ dist/
 .mypy_cache/
 .ruff_cache/
 .ipynb_checkpoints/
+mlruns/
+mlartifacts/
+mlflow.db
 
 # Downloaded data and the label tables built from it. `labels.csv` and
 # `all.csv` carry absolute paths from the machine that wrote them, so they are

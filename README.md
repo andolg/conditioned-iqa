@@ -32,6 +32,36 @@ python prepare_data.py ~/iqa-data/kadid10k
 python train.py --data ~/iqa-data/kadid10k/labels.csv --epochs 5
 ```
 
+Reusable experiment arguments live in `configs/`. Values from a YAML file are
+used as defaults, so explicit command-line options can override them:
+
+```
+uv run python train.py --config configs/kadid_smoke.yaml
+uv run python train.py --config configs/kadid_smoke.yaml --limit 256 --seed 1
+```
+
+Add `mlflow: true` to a config (or pass `--mlflow`) to record the run
+configuration, training loss after every optimizer step, validation
+SRCC/PLCC (including per-dataset metrics), and the final quality-head
+checkpoint. By default MLflow uses a local SQLite database, `mlflow.db`:
+
+```
+python train.py --data ~/iqa-data/kadid10k/labels.csv --epochs 5 \
+  --mlflow --mlflow-experiment conditioned-iqa --mlflow-run-name clip-baseline
+uv run mlflow ui --backend-store-uri sqlite:///mlflow.db
+```
+
+Use `--mlflow-tracking-uri` to send runs to an existing tracking server.
+Every tracked run also writes a complete YAML configuration to `runs/configs/`
+and registers that file under the run's `configs/` artifacts. Change the local
+destination with `--config-dir`. These generated manifests contain resolved
+runtime information and can themselves be passed back through `--config`;
+runtime-only fields are ignored when reconstructing arguments.
+
+If the virtual environment is already activated, the shorter equivalent is
+`mlflow ui --backend-store-uri sqlite:///mlflow.db`. Run either command from
+the repository root, where `mlflow.db` is created.
+
 Use `--limit 2000` while you are still wiring things up — it samples that many
 training images at random, and leaves the held-out split whole.
 
