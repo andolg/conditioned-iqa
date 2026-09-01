@@ -27,6 +27,7 @@ class LabelConditionedMetric(nn.Module):
     ):
         super().__init__()
         self.fusion = fusion
+        self.feature_norm = nn.LayerNorm(feature_dim)
         if fusion == "concat":
             input_dim = feature_dim + num_groups
             self.condition = nn.Identity()
@@ -40,7 +41,6 @@ class LabelConditionedMetric(nn.Module):
             raise ValueError(f"unknown fusion {fusion!r}")
 
         self.head = nn.Sequential(
-            nn.LayerNorm(input_dim),
             nn.Linear(input_dim, hidden_dim),
             nn.GELU(),
             nn.Dropout(dropout),
@@ -50,6 +50,7 @@ class LabelConditionedMetric(nn.Module):
     def forward(
         self, features: torch.Tensor, distortion_labels: torch.Tensor
     ) -> torch.Tensor:
+        features = self.feature_norm(features)
         if self.fusion == "concat":
             fused = torch.cat((features, distortion_labels), dim=1)
         elif self.fusion == "add":

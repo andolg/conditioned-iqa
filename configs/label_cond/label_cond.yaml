@@ -1,4 +1,4 @@
-exp_name: label-conditioned
+exp_name: label-conditioned-bl-params
 run_name: joint-trained-soft-concat-kadid
 data: ~/conditioned-iqa/data/kadid10k/labels.csv
 
@@ -9,6 +9,7 @@ dropout: 0.1
 
 # concat (default), add, or film
 fusion: concat
+zero_labels: false
 
 # hard: prepared one-hot groups; frozen: classifier predictions; joint: both losses
 training_mode: joint
@@ -22,11 +23,11 @@ classifier_image_size: null
 lambda_iqa: 1.0
 lambda_cls: 0.25
 
-epochs: 20
+epochs: 2
 batch_size: 32
 lr: 0.001
 classifier_lr: 0.0001
-weight_decay: 0.0001
+weight_decay: 0.01
 split: reference
 val_fraction: 0.2
 score_column: scaled_subjective_score

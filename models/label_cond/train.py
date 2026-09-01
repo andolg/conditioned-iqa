@@ -33,13 +33,18 @@ def predicted_condition(logits: torch.Tensor, label_type: str) -> torch.Tensor:
     return hard_condition(logits.argmax(dim=1))
 
 
-def train_hard(metric, encoder, loader, optimizer, quality_loss, device):
+def train_hard(
+    metric, encoder, loader, optimizer, quality_loss, device, zero_labels=False
+):
     metric.train()
     losses = []
-    for batch in tqdm(loader, desc="train/hard", leave=False):
+    description = "train/zero" if zero_labels else "train/hard"
+    for batch in tqdm(loader, desc=description, leave=False):
         features = encode_images(encoder, batch["image"].to(device))
         targets = batch["target"].to(device)
         condition = hard_condition(batch["group"].to(device))
+        if zero_labels:
+            condition.zero_()
         loss = quality_loss(metric(features, condition), targets)
         optimizer.zero_grad()
         loss.backward()
@@ -109,7 +114,9 @@ def train_joint(
 
 
 @torch.no_grad()
-def evaluate(metric, classifier, encoder, loader, mode, label_type, device):
+def evaluate(
+    metric, classifier, encoder, loader, mode, label_type, device, zero_labels=False
+):
     metric.eval()
     if classifier is not None:
         classifier.eval()
@@ -118,7 +125,11 @@ def evaluate(metric, classifier, encoder, loader, mode, label_type, device):
     cls_correct = cls_count = 0
     for batch in tqdm(loader, desc="validation", leave=False):
         group_targets = batch["group"].to(device)
-        if mode == "hard":
+        if zero_labels:
+            condition = torch.zeros(
+                len(group_targets), len(GROUPS), device=device
+            )
+        elif mode == "hard":
             condition = hard_condition(group_targets)
         else:
             logits = classifier(batch["classifier_image"].to(device))
@@ -227,6 +238,7 @@ def main():
     assert mode in {"hard", "frozen", "joint"}
     label_type = config.get("classifier_labels", "soft")
     assert label_type in {"hard", "soft"}
+    zero_labels = config.get("zero_labels", False)
 
     encoder, image_size, feature_dim = load_image_encoder(
         config["backbone"], config.get("weights"), device
@@ -285,7 +297,7 @@ def main():
     optimizer = make_optimizer(metric, classifier, config)
 
     print(
-        f"{mode=} {config['fusion']=} {label_type=} "
+        f"{mode=} {config['fusion']=} {label_type=} {zero_labels=} "
         f"train={len(train_set)} val={len(val_set)} device={device}"
     )
 
@@ -317,7 +329,13 @@ def main():
         for epoch in range(1, config["epochs"] + 1):
             if mode == "hard":
                 train_metrics = train_hard(
-                    metric, encoder, train_loader, optimizer, quality_loss, device
+                    metric,
+                    encoder,
+                    train_loader,
+                    optimizer,
+                    quality_loss,
+                    device,
+                    zero_labels,
                 )
             elif mode == "frozen":
                 train_metrics = train_frozen(
@@ -346,7 +364,14 @@ def main():
                 )
 
             val_metrics = evaluate(
-                metric, classifier, encoder, val_loader, mode, label_type, device
+                metric,
+                classifier,
+                encoder,
+                val_loader,
+                mode,
+                label_type,
+                device,
+                zero_labels,
             )
             metrics = {
                 **{f"train/{key}": value for key, value in train_metrics.items()},
