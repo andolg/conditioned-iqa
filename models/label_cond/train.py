@@ -281,6 +281,7 @@ def main():
         config["hidden_dim"],
         config["dropout"],
         config["fusion"],
+        config.get("cls_emb_size"),
     ).to(device)
     classifier = load_classifier(config, device) if mode != "hard" else None
     if mode == "frozen":

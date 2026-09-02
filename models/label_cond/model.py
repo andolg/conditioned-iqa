@@ -21,36 +21,54 @@ class LabelConditionedMetric(nn.Module):
         self,
         feature_dim: int,
         num_groups: int,
-        hidden_dim: int = 256,
+        hidden_dim: int | list[int] = 256,
         dropout: float = 0.1,
         fusion: str = "concat",
+        cls_emb_size: int | None = None,
     ):
         super().__init__()
         self.fusion = fusion
         self.feature_norm = nn.LayerNorm(feature_dim)
+
+        if cls_emb_size is not None and cls_emb_size < 1:
+            raise ValueError("cls_emb_size must be positive or null")
+        condition_dim = cls_emb_size or num_groups
+        if cls_emb_size is None:
+            self.label_embedding = nn.Identity()
+        else:
+            # A bias-free projection is an embedding lookup for a one-hot
+            # label, and a differentiable weighted embedding for soft labels.
+            self.label_embedding = nn.Linear(num_groups, cls_emb_size, bias=False)
+            nn.init.normal_(self.label_embedding.weight, mean=0.0, std=0.02)
+
         if fusion == "concat":
-            input_dim = feature_dim + num_groups
+            input_dim = feature_dim + condition_dim
             self.condition = nn.Identity()
         elif fusion == "add":
             input_dim = feature_dim
-            self.condition = nn.Linear(num_groups, feature_dim)
+            self.condition = nn.Linear(condition_dim, feature_dim)
         elif fusion == "film":
             input_dim = feature_dim
-            self.condition = nn.Linear(num_groups, 2 * feature_dim)
+            self.condition = nn.Linear(condition_dim, 2 * feature_dim)
         else:
             raise ValueError(f"unknown fusion {fusion!r}")
 
-        self.head = nn.Sequential(
-            nn.Linear(input_dim, hidden_dim),
-            nn.GELU(),
-            nn.Dropout(dropout),
-            nn.Linear(hidden_dim, 1),
-        )
+        hidden_dims = [hidden_dim] if isinstance(hidden_dim, int) else list(hidden_dim)
+        if not hidden_dims or any(dim < 1 for dim in hidden_dims):
+            raise ValueError("hidden_dim must be a positive integer or non-empty list of them")
+        layers = []
+        previous_dim = input_dim
+        for dim in hidden_dims:
+            layers.extend((nn.Linear(previous_dim, dim), nn.GELU(), nn.Dropout(dropout)))
+            previous_dim = dim
+        layers.append(nn.Linear(previous_dim, 1))
+        self.head = nn.Sequential(*layers)
 
     def forward(
         self, features: torch.Tensor, distortion_labels: torch.Tensor
     ) -> torch.Tensor:
         features = self.feature_norm(features)
+        distortion_labels = self.label_embedding(distortion_labels)
         if self.fusion == "concat":
             fused = torch.cat((features, distortion_labels), dim=1)
         elif self.fusion == "add":

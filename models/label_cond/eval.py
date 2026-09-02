@@ -217,7 +217,12 @@ def load_model(run, device):
         source["backbone"], source.get("weights"), device
     )
     metric = LabelConditionedMetric(
-        feature_dim, len(GROUPS), source["hidden_dim"], source["dropout"], source["fusion"]
+        feature_dim,
+        len(GROUPS),
+        source["hidden_dim"],
+        source["dropout"],
+        source["fusion"],
+        source.get("cls_emb_size"),
     ).to(device)
     metric.load_state_dict(checkpoint["metric"])
     metric.eval()
@@ -274,10 +279,22 @@ def rounded(value, digits=4):
 
 def design_description(config, source):
     backbone = config["backbone_names"].get(source["backbone"], source["backbone"])
+    embedding = source.get("cls_emb_size")
+    label_input = (
+        f"{embedding}-d embedded labels" if embedding is not None else "labels"
+    )
+    hidden_dim = source["hidden_dim"]
+    head = "MLP" if isinstance(hidden_dim, int) else f"{len(hidden_dim)}-hidden-layer MLP"
     if source.get("zero_labels", False):
-        return f"{backbone} zero-label concat baseline", "Concat [image, zero labels] -> MLP"
+        return (
+            f"{backbone} zero-label concat baseline",
+            f"Concat [image, zero {label_input}] -> {head}",
+        )
     if source["training_mode"] == "hard":
-        return f"{backbone} hard-label concat", "Concat [image, ground-truth hard labels] -> MLP"
+        return (
+            f"{backbone} hard-label concat",
+            f"Concat [image, ground-truth hard {label_input}] -> {head}",
+        )
 
     labels = source["classifier_labels"]
     if source["training_mode"] == "frozen":
@@ -286,7 +303,10 @@ def design_description(config, source):
         classifier = "joint pretrained classifier"
     else:
         classifier = "joint scratch classifier"
-    return f"{backbone} {classifier} {labels}-label concat", f"Concat [image, {labels} labels from {classifier}] -> MLP"
+    return (
+        f"{backbone} {classifier} {labels}-label concat",
+        f"Concat [image, {labels} {label_input} from {classifier}] -> {head}",
+    )
 
 
 def aggregate(config, runs):

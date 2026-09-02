@@ -1,0 +1,6 @@
+run_name: joint-scratch-soft-labels-emb32-deep-concat-kadid
+training_mode: joint
+classifier_labels: soft
+classifier_checkpoint: null
+cls_emb_size: 32
+hidden_dim: [256, 256]
