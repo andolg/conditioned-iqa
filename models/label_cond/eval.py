@@ -269,7 +269,24 @@ def mean(values):
 
 
 def rounded(value, digits=4):
-    return "" if value is None else round(value, digits)
+    return "" if value is None else str(round(value, digits)).replace(".", ",")
+
+
+def design_description(config, source):
+    backbone = config["backbone_names"].get(source["backbone"], source["backbone"])
+    if source.get("zero_labels", False):
+        return f"{backbone} zero-label concat baseline", "Concat [image, zero labels] -> MLP"
+    if source["training_mode"] == "hard":
+        return f"{backbone} hard-label concat", "Concat [image, ground-truth hard labels] -> MLP"
+
+    labels = source["classifier_labels"]
+    if source["training_mode"] == "frozen":
+        classifier = "frozen pretrained classifier"
+    elif source["classifier_checkpoint"]:
+        classifier = "joint pretrained classifier"
+    else:
+        classifier = "joint scratch classifier"
+    return f"{backbone} {classifier} {labels}-label concat", f"Concat [image, {labels} labels from {classifier}] -> MLP"
 
 
 def aggregate(config, runs):
@@ -290,8 +307,11 @@ def aggregate(config, runs):
             if path.exists():
                 scores[dataset_key] = json.loads(path.read_text())
 
+        design, description = design_description(config, source)
         row = {column: "" for column in TABLE_COLUMNS}
         row.update({
+            "Design": design,
+            "Description": description,
             "Backbone": config["backbone_names"].get(source["backbone"], source["backbone"]),
             "Train datasets": ", ".join(config["train_datasets"]),
             "Epochs": source["epochs"],
