@@ -1,0 +1,71 @@
+experiment: label-conditioned-bl-params
+mlflow_tracking_uri: mlruns
+checkpoint_root: weights
+intermediate_root: untracked
+table_root: tables
+device: cuda:0
+mp_pool_size: 4
+batch_size: 32
+workers: 2
+classifier_benchmark_size: [384, 512]  # H, W for latency/GFLOPs only
+latency_warmup: 10
+latency_repeats: 50
+train_datasets: [KADID-10k]
+
+backbone_names:
+  clip-base: CLIP-B/16
+  clip-large: CLIP-L/14@336
+  siglip: SigLIP-L/16@256
+  siglip2-base: SigLIP2-B/16
+  siglip2-large: SigLIP2-L/16@256
+
+datasets:
+  kadid10k:
+    name: KADID-10k
+    group: validation
+    path: ~/conditioned-iqa/data/kadid10k/labels.csv
+  spaq:
+    name: SPAQ
+    group: validation
+    path: ~/conditioned-iqa/data/spaq/labels.csv
+  gfiqa20k:
+    name: GFIQA-20k
+    group: validation
+    path: ~/conditioned-iqa/data/gfiqa20k/labels.csv
+    enabled: false
+  pipal:
+    name: PIPAL
+    group: validation
+    path: ~/conditioned-iqa/data/pipal/labels.csv
+  aigciqa2023:
+    name: AIGCIQA2023
+    group: validation
+    path: ~/conditioned-iqa/data/aigciqa2023/labels.csv
+  tid2013:
+    name: TID2013
+    group: test
+    path: ~/conditioned-iqa/data/tid2013/labels.csv
+  csiq:
+    name: CSIQ
+    group: test
+    path: ~/conditioned-iqa/data/csiq/labels.csv
+  cid2013:
+    name: CID2013
+    group: test
+    path: ~/conditioned-iqa/data/cid2013/labels.csv
+  koniq10k:
+    name: KonIQ-10k
+    group: test
+    path: ~/conditioned-iqa/data/koniq10k/labels.csv
+  clive:
+    name: CLIVE
+    group: test
+    path: ~/conditioned-iqa/data/clive/labels.csv
+  agiqa3k:
+    name: AGIQA-3K
+    group: test
+    path: ~/conditioned-iqa/data/agiqa3k/labels.csv
+  uhdiqa:
+    name: UHD-IQA
+    group: test
+    path: ~/conditioned-iqa/data/uhdiqa/labels.csv

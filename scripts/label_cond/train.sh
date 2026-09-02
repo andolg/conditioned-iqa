@@ -2,7 +2,7 @@
 set -e
 
 export MLFLOW_ALLOW_FILE_STORE=true
-export CUDA_VISIBLE_DEVICES=1
+export CUDA_VISIBLE_DEVICES=6
 
 cd "$(dirname "$0")/../.."
 
@@ -26,8 +26,6 @@ run_batch() {
     return "$status"
 }
 
-
-
 run_batch \
     configs/label_cond/01_hard.yaml \
     configs/label_cond/02_frozen_hard.yaml \
@@ -35,9 +33,8 @@ run_batch \
     configs/label_cond/04_joint_pretrained_hard.yaml
 
 
-
-    # configs/label_cond/00_zero_labels.yaml \
 run_batch \
+    configs/label_cond/00_zero_labels.yaml \
     configs/label_cond/05_joint_pretrained_soft.yaml \
     configs/label_cond/06_joint_untrained_hard.yaml \
     configs/label_cond/07_joint_untrained_soft.yaml

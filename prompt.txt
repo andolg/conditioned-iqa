@@ -1,0 +1,19 @@
+check how evaluation and results export is done in /home/sergey/conditioned-iqa/28s_mur/conditioned-iqa 
+in files evaluate_text_conditioned.py and export_results_summary.py (do not edit anything).
+
+add an evaluation script in models/label_cond/eval.py; 
+for each model in a specified mlflow experiment (label-conditioned-bl-params for now), use the best checkpoint, so infer its number from the logged validation metric. add a config file for this script to store data paths, name mappings, etc. if needed.
+
+Run eval on all datasts except GFIQA-20k (it's not working correcty).
+
+so the final table should include these columns:
+
+Design	Description	Backbone	Train datasets	Epochs	Seed	Baseline	Latency p50 (ms)	Latency p95 (ms)	Peak memory (MB)	FPS	KADID-10k SRCC	KADID-10k PLCC	SPAQ SRCC	SPAQ PLCC	GFIQA-20k SRCC	GFIQA-20k PLCC	PIPAL SRCC	PIPAL PLCC	AIGCIQA2023 SRCC	AIGCIQA2023 PLCC	TID2013 SRCC	TID2013 PLCC	CSIQ SRCC	CSIQ PLCC	CID2013 SRCC	CID2013 PLCC	KonIQ-10k SRCC	KonIQ-10k PLCC	CLIVE SRCC	CLIVE PLCC	AGIQA-3K SRCC	AGIQA-3K PLCC	UHD-IQA SRCC	UHD-IQA PLCC	Avg validation SRCC	Avg validation PLCC	Avg test SRCC	Avg test PLCC	Avg val+test SRCC	Avg val+test PLCC	Parameters	GFLOPs
+
+design and description columns will be filled manually.
+
+important: i don't need exports to google sheets, i just need an equivalen csv table in tables/<exp_name>/aggregated.csv ; save intermediate results for each model and dataset under untracked/<exp_name>/ , so if anything fails the script can pick up only the unfinished ones.
+
+write the script in my project root ~/conditioned-iqa/28a_dol/conditioned-iqa
+
+keep the evaluation protocol the same as 28s_mur, so the results are completely comparable.

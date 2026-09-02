@@ -1,8 +1,8 @@
-exp_name: label-conditioned-bl-params
+exp_name: label-conditioned-bl-params-clip-large
 run_name: joint-trained-soft-concat-kadid
 data: ~/conditioned-iqa/data/kadid10k/labels.csv
 
-backbone: clip-base
+backbone: clip-large
 weights: null
 hidden_dim: 256
 dropout: 0.1
@@ -23,7 +23,7 @@ classifier_image_size: null
 lambda_iqa: 1.0
 lambda_cls: 0.25
 
-epochs: 2
+epochs: 5
 batch_size: 32
 lr: 0.001
 classifier_lr: 0.0001

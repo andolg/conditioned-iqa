@@ -1,6 +1,6 @@
 # Custom
 weights/
-uv.lock
+untracked/
 
 # Environments
 .venv/
