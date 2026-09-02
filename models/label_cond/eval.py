@@ -36,7 +36,7 @@ TABLE_COLUMNS = [
     "KonIQ-10k SRCC", "KonIQ-10k PLCC", "CLIVE SRCC", "CLIVE PLCC",
     "AGIQA-3K SRCC", "AGIQA-3K PLCC", "UHD-IQA SRCC", "UHD-IQA PLCC",
     "Avg validation SRCC", "Avg validation PLCC", "Avg test SRCC", "Avg test PLCC",
-    "Avg val+test SRCC", "Avg val+test PLCC", "Parameters", "GFLOPs",
+    "Avg val+test SRCC", "Avg val+test PLCC", "Parameters", "GFLOPs", "run_id", "run_name",
 ]
 
 
@@ -303,6 +303,8 @@ def aggregate(config, runs):
             "FPS": rounded(scores.get("kadid10k", {}).get("images_per_second"), 2),
             "Parameters": f'{system["parameters"] / 1e6:.2f}M',
             "GFLOPs": rounded(system["gflops"]),
+            "run_id": metadata["run_id"],
+            "run_name": metadata["run_name"],
         })
 
         validation_srcc, validation_plcc, test_srcc, test_plcc = [], [], [], []
