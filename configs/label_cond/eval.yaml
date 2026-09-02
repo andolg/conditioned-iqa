@@ -28,6 +28,7 @@ datasets:
     name: SPAQ
     group: validation
     path: ~/conditioned-iqa/data/spaq/labels.csv
+    enabled: false
   gfiqa20k:
     name: GFIQA-20k
     group: validation
@@ -37,10 +38,12 @@ datasets:
     name: PIPAL
     group: validation
     path: ~/conditioned-iqa/data/pipal/labels.csv
+    enabled: false
   aigciqa2023:
     name: AIGCIQA2023
     group: validation
     path: ~/conditioned-iqa/data/aigciqa2023/labels.csv
+    enabled: false
   tid2013:
     name: TID2013
     group: test

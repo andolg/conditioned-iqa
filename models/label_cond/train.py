@@ -33,6 +33,14 @@ def predicted_condition(logits: torch.Tensor, label_type: str) -> torch.Tensor:
     return hard_condition(logits.argmax(dim=1))
 
 
+def classifier_condition(
+    classifier, images: torch.Tensor, label_type: str, feature_layer: str | None
+) -> torch.Tensor:
+    if feature_layer is not None:
+        return classifier.extract_features(images, feature_layer)
+    return predicted_condition(classifier(images), label_type)
+
+
 def train_hard(
     metric, encoder, loader, optimizer, quality_loss, device, zero_labels=False
 ):
@@ -54,7 +62,15 @@ def train_hard(
 
 
 def train_frozen(
-    metric, classifier, encoder, loader, optimizer, quality_loss, label_type, device
+    metric,
+    classifier,
+    encoder,
+    loader,
+    optimizer,
+    quality_loss,
+    label_type,
+    feature_layer,
+    device,
 ):
     metric.train()
     classifier.eval()
@@ -62,8 +78,12 @@ def train_frozen(
     for batch in tqdm(loader, desc="train/frozen", leave=False):
         features = encode_images(encoder, batch["image"].to(device))
         with torch.no_grad():
-            logits = classifier(batch["classifier_image"].to(device))
-            condition = predicted_condition(logits, label_type)
+            condition = classifier_condition(
+                classifier,
+                batch["classifier_image"].to(device),
+                label_type,
+                feature_layer,
+            )
         loss = quality_loss(
             metric(features, condition), batch["target"].to(device)
         )
@@ -115,7 +135,15 @@ def train_joint(
 
 @torch.no_grad()
 def evaluate(
-    metric, classifier, encoder, loader, mode, label_type, device, zero_labels=False
+    metric,
+    classifier,
+    encoder,
+    loader,
+    mode,
+    label_type,
+    feature_layer,
+    device,
+    zero_labels=False,
 ):
     metric.eval()
     if classifier is not None:
@@ -132,10 +160,16 @@ def evaluate(
         elif mode == "hard":
             condition = hard_condition(group_targets)
         else:
-            logits = classifier(batch["classifier_image"].to(device))
-            condition = predicted_condition(logits, label_type)
-            cls_correct += (logits.argmax(1) == group_targets).sum().item()
-            cls_count += len(group_targets)
+            classifier_images = batch["classifier_image"].to(device)
+            if feature_layer is None:
+                logits = classifier(classifier_images)
+                condition = predicted_condition(logits, label_type)
+                cls_correct += (logits.argmax(1) == group_targets).sum().item()
+                cls_count += len(group_targets)
+            else:
+                condition = classifier.extract_features(
+                    classifier_images, feature_layer
+                )
 
         features = encode_images(encoder, batch["image"].to(device))
         predictions.append(metric(features, condition).cpu().numpy())
@@ -239,6 +273,9 @@ def main():
     label_type = config.get("classifier_labels", "soft")
     assert label_type in {"hard", "soft"}
     zero_labels = config.get("zero_labels", False)
+    classifier_feature_layer = config.get("classifier_feature_layer")
+    if classifier_feature_layer is not None and mode != "frozen":
+        raise ValueError("classifier_feature_layer currently requires training_mode: frozen")
 
     encoder, image_size, feature_dim = load_image_encoder(
         config["backbone"], config.get("weights"), device
@@ -275,13 +312,18 @@ def main():
         pin_memory=device.type == "cuda",
     )
 
+    condition_dim = (
+        DistortionClassifier.feature_dim(classifier_feature_layer)
+        if classifier_feature_layer is not None else len(GROUPS)
+    )
     metric = LabelConditionedMetric(
         feature_dim,
-        len(GROUPS),
+        condition_dim,
         config["hidden_dim"],
         config["dropout"],
         config["fusion"],
         config.get("cls_emb_size"),
+        config.get("condition_layer_norm", False),
     ).to(device)
     classifier = load_classifier(config, device) if mode != "hard" else None
     if mode == "frozen":
@@ -299,7 +341,8 @@ def main():
 
     print(
         f"{mode=} {config['fusion']=} {label_type=} {zero_labels=} "
-        f"train={len(train_set)} val={len(val_set)} device={device}"
+        f"{classifier_feature_layer=} train={len(train_set)} val={len(val_set)} "
+        f"device={device}"
     )
 
     run_context, mlflow = mlflow_context(config)
@@ -347,6 +390,7 @@ def main():
                     optimizer,
                     quality_loss,
                     label_type,
+                    classifier_feature_layer,
                     device,
                 )
             else:
@@ -371,6 +415,7 @@ def main():
                 val_loader,
                 mode,
                 label_type,
+                classifier_feature_layer,
                 device,
                 zero_labels,
             )

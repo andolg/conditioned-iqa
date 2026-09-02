@@ -1,0 +1,7 @@
+run_name: frozen-trained-layer3-norm-deep-concat-kadid
+training_mode: frozen
+classifier_labels: soft
+classifier_feature_layer: layer3
+cls_emb_size: null
+condition_layer_norm: true
+hidden_dim: [256, 256]

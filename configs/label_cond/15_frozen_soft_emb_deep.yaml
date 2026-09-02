@@ -1,0 +1,5 @@
+run_name: frozen-trained-soft-labels-emb32-deep-concat-kadid
+training_mode: frozen
+classifier_labels: soft
+cls_emb_size: 32
+hidden_dim: [256, 256]

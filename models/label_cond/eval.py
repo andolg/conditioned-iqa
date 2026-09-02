@@ -77,10 +77,19 @@ def one_hot(labels):
     return F.one_hot(labels, num_classes=len(GROUPS)).float()
 
 
-def classify_native(classifier, images, device):
-    return torch.cat([
+def classifier_condition_native(classifier, images, source, device):
+    feature_layer = source.get("classifier_feature_layer")
+    if feature_layer is not None:
+        return torch.cat([
+            classifier.extract_features(image.unsqueeze(0).to(device), feature_layer)
+            for image in images
+        ])
+    logits = torch.cat([
         classifier(image.unsqueeze(0).to(device)) for image in images
     ])
+    if source.get("classifier_labels", "soft") == "soft":
+        return logits.softmax(dim=1)
+    return one_hot(logits.argmax(dim=1))
 
 
 def condition_for(batch, source, classifier, device):
@@ -89,10 +98,9 @@ def condition_for(batch, source, classifier, device):
         return torch.zeros(len(labels), len(GROUPS), device=device)
     if source["training_mode"] == "hard":
         return one_hot(labels)
-    logits = classify_native(classifier, batch["classifier_image"], device)
-    if source.get("classifier_labels", "soft") == "soft":
-        return logits.softmax(dim=1)
-    return one_hot(logits.argmax(dim=1))
+    return classifier_condition_native(
+        classifier, batch["classifier_image"], source, device
+    )
 
 
 @torch.no_grad()
@@ -168,6 +176,31 @@ def metric_value(client, run_id, key, step):
     return next(item.value for item in client.get_metric_history(run_id, key) if item.step == step)
 
 
+def configured_train_dataset_keys(config):
+    """Dataset columns reserved for held-out metrics from training."""
+    train_names = set(config["train_datasets"])
+    keys = {
+        key for key, dataset in config["datasets"].items()
+        if dataset["name"] in train_names
+    }
+    missing = train_names - {config["datasets"][key]["name"] for key in keys}
+    if missing:
+        raise ValueError(f"train_datasets not found in datasets: {sorted(missing)}")
+    return keys
+
+
+def actual_train_dataset_keys(config, source):
+    """Configured train datasets whose labels.csv was used by this run."""
+    values = source["data"]
+    values = [values] if isinstance(values, str) else values
+    data_paths = {Path(value).expanduser().resolve() for value in values}
+    return {
+        key for key in configured_train_dataset_keys(config)
+        for dataset in [config["datasets"][key]]
+        if Path(dataset["path"]).expanduser().resolve() in data_paths
+    }
+
+
 def source_runs(config):
     os.environ.setdefault("MLFLOW_ALLOW_FILE_STORE", "true")
     from mlflow import MlflowClient
@@ -193,16 +226,43 @@ def source_runs(config):
             Path(config["checkpoint_root"]).expanduser()
             / config["experiment"] / name / "best.pt"
         )
+        checkpoint = torch.load(
+            checkpoint_path, map_location="cpu", weights_only=False
+        )
+        source = checkpoint["config"]
+        train_keys = actual_train_dataset_keys(config, source)
+        validation = {
+            dataset_key: {
+                "srcc": metric_value(
+                    client, run.info.run_id, f"val/{dataset_key}/srcc", best.step
+                ),
+                "plcc": metric_value(
+                    client, run.info.run_id, f"val/{dataset_key}/plcc", best.step
+                ),
+            }
+            for dataset_key in train_keys
+        }
         result.append({
             "run_id": run.info.run_id,
             "run_name": name,
             "best_epoch": best.step,
             "best_srcc": best.value,
-            "val_srcc": metric_value(client, run.info.run_id, "val/kadid10k/srcc", best.step),
-            "val_plcc": metric_value(client, run.info.run_id, "val/kadid10k/plcc", best.step),
+            "validation": validation,
+            "train_dataset_keys": sorted(train_keys),
             "checkpoint": str(checkpoint_path),
         })
     return result
+
+
+def selected_run_names(run_names, run_config_paths):
+    selected = set(run_names)
+    for path in run_config_paths:
+        patch = yaml.safe_load(path.read_text()) or {}
+        run_name = patch.get("run_name")
+        if not run_name:
+            raise ValueError(f"{path}: expected a run_name")
+        selected.add(run_name)
+    return selected
 
 
 def load_model(run, device):
@@ -216,13 +276,18 @@ def load_model(run, device):
     encoder, image_size, feature_dim = load_image_encoder(
         source["backbone"], source.get("weights"), device
     )
+    condition_dim = (
+        DistortionClassifier.feature_dim(source["classifier_feature_layer"])
+        if source.get("classifier_feature_layer") is not None else len(GROUPS)
+    )
     metric = LabelConditionedMetric(
         feature_dim,
-        len(GROUPS),
+        condition_dim,
         source["hidden_dim"],
         source["dropout"],
         source["fusion"],
         source.get("cls_emb_size"),
+        source.get("condition_layer_norm", False),
     ).to(device)
     metric.load_state_dict(checkpoint["metric"])
     metric.eval()
@@ -248,12 +313,18 @@ def system_metrics(config, source, encoder, metric, classifier, image_size, devi
             classifier_images = torch.randn(
                 1, 3, *config["classifier_benchmark_size"], device=device
             )
-            logits = classifier(classifier_images)
-            condition = (
-                logits.softmax(dim=1)
-                if source.get("classifier_labels", "soft") == "soft"
-                else one_hot(logits.argmax(dim=1))
-            )
+            feature_layer = source.get("classifier_feature_layer")
+            if feature_layer is not None:
+                condition = classifier.extract_features(
+                    classifier_images, feature_layer
+                )
+            else:
+                logits = classifier(classifier_images)
+                condition = (
+                    logits.softmax(dim=1)
+                    if source.get("classifier_labels", "soft") == "soft"
+                    else one_hot(logits.argmax(dim=1))
+                )
         return metric(features, condition)
 
     latency_p50, latency_p95, peak_memory = measure_latency_memory(
@@ -279,21 +350,32 @@ def rounded(value, digits=4):
 
 def design_description(config, source):
     backbone = config["backbone_names"].get(source["backbone"], source["backbone"])
+    fusion = source["fusion"]
     embedding = source.get("cls_emb_size")
     label_input = (
         f"{embedding}-d embedded labels" if embedding is not None else "labels"
     )
     hidden_dim = source["hidden_dim"]
     head = "MLP" if isinstance(hidden_dim, int) else f"{len(hidden_dim)}-hidden-layer MLP"
+
+    def describe_fusion(labels):
+        if fusion == "concat":
+            return f"Concat [image, {labels}] -> {head}"
+        if fusion == "add":
+            return f"Add projected {labels} to image features -> {head}"
+        if fusion == "film":
+            return f"FiLM-modulate image features with projected {labels} -> {head}"
+        raise ValueError(f"unknown fusion {fusion!r}")
+
     if source.get("zero_labels", False):
         return (
-            f"{backbone} zero-label concat baseline",
-            f"Concat [image, zero {label_input}] -> {head}",
+            f"{backbone} zero-label {fusion} baseline",
+            describe_fusion(f"zero {label_input}"),
         )
     if source["training_mode"] == "hard":
         return (
-            f"{backbone} hard-label concat",
-            f"Concat [image, ground-truth hard {label_input}] -> {head}",
+            f"{backbone} hard-label {fusion}",
+            describe_fusion(f"ground-truth hard {label_input}"),
         )
 
     labels = source["classifier_labels"]
@@ -303,9 +385,26 @@ def design_description(config, source):
         classifier = "joint pretrained classifier"
     else:
         classifier = "joint scratch classifier"
+    feature_layer = source.get("classifier_feature_layer")
+    if feature_layer is None:
+        condition_name = f"{labels}-label"
+        condition_input = f"{labels} {label_input} from {classifier}"
+    else:
+        condition_name = (
+            f"{feature_layer}-feature-ln"
+            if source.get("condition_layer_norm", False)
+            else f"{feature_layer}-feature"
+        )
+        feature_input = (
+            f"{embedding}-d projected features"
+            if embedding is not None else "features"
+        )
+        if source.get("condition_layer_norm", False):
+            feature_input = f"LayerNorm {feature_input}"
+        condition_input = f"{feature_input} from {feature_layer} of {classifier}"
     return (
-        f"{backbone} {classifier} {labels}-label concat",
-        f"Concat [image, {labels} {label_input} from {classifier}] -> {head}",
+        f"{backbone} {classifier} {condition_name} {fusion}",
+        describe_fusion(condition_input),
     )
 
 
@@ -333,8 +432,11 @@ def aggregate(config, runs):
             "Design": design,
             "Description": description,
             "Backbone": config["backbone_names"].get(source["backbone"], source["backbone"]),
-            "Train datasets": ", ".join(config["train_datasets"]),
-            "Epochs": source["epochs"],
+            "Train datasets": ", ".join(
+                config["datasets"][key]["name"]
+                for key in sorted(actual_train_dataset_keys(config, source))
+            ),
+            "Epochs": metadata["best_epoch"],
             "Seed": source["seed"],
             "Baseline": "baseline" if source.get("zero_labels", False) else "variant",
             "Latency p50 (ms)": rounded(system["latency_p50_ms"], 1),
@@ -347,23 +449,39 @@ def aggregate(config, runs):
             "run_name": metadata["run_name"],
         })
 
+        train_keys = actual_train_dataset_keys(config, source)
+        configured_train_keys = configured_train_dataset_keys(config)
+        if "validation" in metadata:
+            validation_metrics = metadata["validation"]
+        else:
+            # Compatibility with intermediate results written before the
+            # per-training-dataset validation mapping was introduced.
+            validation_metrics = {
+                "kadid10k": {
+                    "srcc": metadata["validation_srcc"],
+                    "plcc": metadata["validation_plcc"],
+                }
+            }
         validation_srcc, validation_plcc, test_srcc, test_plcc = [], [], [], []
         for dataset_key, dataset in config["datasets"].items():
-            if dataset_key == "kadid10k":
-                srcc, plcc = metadata["validation_srcc"], metadata["validation_plcc"]
+            if dataset_key in train_keys:
+                values = validation_metrics[dataset_key]
+                srcc, plcc = values["srcc"], values["plcc"]
+            elif dataset_key in configured_train_keys:
+                # A validation-only dataset not used to train this run remains blank.
+                continue
             elif dataset_key in scores:
                 srcc, plcc = scores[dataset_key]["srcc"], scores[dataset_key]["plcc"]
             else:
                 continue
             row[f'{dataset["name"]} SRCC'] = rounded(srcc)
             row[f'{dataset["name"]} PLCC'] = rounded(plcc)
-            if dataset.get("enabled", True):
-                if dataset["group"] == "validation":
-                    validation_srcc.append(srcc)
-                    validation_plcc.append(plcc)
-                else:
-                    test_srcc.append(srcc)
-                    test_plcc.append(plcc)
+            if dataset_key in train_keys:
+                validation_srcc.append(srcc)
+                validation_plcc.append(plcc)
+            elif dataset.get("enabled", True) and dataset["group"] == "test":
+                test_srcc.append(srcc)
+                test_plcc.append(plcc)
 
         avg_val_srcc, avg_val_plcc = mean(validation_srcc), mean(validation_plcc)
         avg_test_srcc, avg_test_plcc = mean(test_srcc), mean(test_plcc)
@@ -395,9 +513,10 @@ def evaluate_run(task):
     root = Path(config["intermediate_root"]) / config["experiment"] / run["key"]
     metadata_path = root / "metadata.json"
     system_path = root / "system.json"
+    configured_train_keys = configured_train_dataset_keys(config)
     enabled = {
         key: value for key, value in config["datasets"].items()
-        if value.get("enabled", True)
+        if value.get("enabled", True) and key not in configured_train_keys
     }
     pending = [key for key in enabled if not (root / f"{key}.json").exists()]
     if metadata_path.exists() and system_path.exists() and not pending:
@@ -414,8 +533,8 @@ def evaluate_run(task):
             "run_name": run["run_name"],
             "best_epoch": run["best_epoch"],
             "best_validation_srcc": run["best_srcc"],
-            "validation_srcc": run["val_srcc"],
-            "validation_plcc": run["val_plcc"],
+            "validation": run["validation"],
+            "train_dataset_keys": run["train_dataset_keys"],
             "checkpoint": run["checkpoint"],
             "source": source,
         })
@@ -454,9 +573,39 @@ def evaluate_run(task):
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--config", default="configs/label_cond/eval.yaml")
+    parser.add_argument(
+        "--run-name",
+        action="append",
+        default=[],
+        help="evaluate this MLflow run name (repeatable)",
+    )
+    parser.add_argument(
+        "--run-config",
+        action="append",
+        type=Path,
+        default=[],
+        help="training YAML patch whose run_name should be evaluated (repeatable)",
+    )
+    parser.add_argument(
+        "--table-root",
+        help="override table_root, useful for a separate selected-run table",
+    )
     args = parser.parse_args()
     config = yaml.safe_load(Path(args.config).read_text())
+    if args.table_root:
+        config["table_root"] = args.table_root
+
     runs = source_runs(config)
+    selected = selected_run_names(args.run_name, args.run_config)
+    if selected:
+        available = {run["run_name"] for run in runs}
+        missing = selected - available
+        if missing:
+            raise ValueError(
+                f"selected runs are not finished or absent from {config['experiment']}: "
+                f"{sorted(missing)}"
+            )
+        runs = [run for run in runs if run["run_name"] in selected]
     for run in runs:
         run["key"] = f'{slug(run["run_name"])}__{run["run_id"][:8]}'
 

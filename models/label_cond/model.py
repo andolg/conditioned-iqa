@@ -25,6 +25,7 @@ class LabelConditionedMetric(nn.Module):
         dropout: float = 0.1,
         fusion: str = "concat",
         cls_emb_size: int | None = None,
+        condition_layer_norm: bool = False,
     ):
         super().__init__()
         self.fusion = fusion
@@ -33,6 +34,9 @@ class LabelConditionedMetric(nn.Module):
         if cls_emb_size is not None and cls_emb_size < 1:
             raise ValueError("cls_emb_size must be positive or null")
         condition_dim = cls_emb_size or num_groups
+        self.condition_norm = (
+            nn.LayerNorm(num_groups) if condition_layer_norm else nn.Identity()
+        )
         if cls_emb_size is None:
             self.label_embedding = nn.Identity()
         else:
@@ -68,6 +72,7 @@ class LabelConditionedMetric(nn.Module):
         self, features: torch.Tensor, distortion_labels: torch.Tensor
     ) -> torch.Tensor:
         features = self.feature_norm(features)
+        distortion_labels = self.condition_norm(distortion_labels)
         distortion_labels = self.label_embedding(distortion_labels)
         if self.fusion == "concat":
             fused = torch.cat((features, distortion_labels), dim=1)

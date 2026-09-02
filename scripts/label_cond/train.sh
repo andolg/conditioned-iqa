@@ -2,7 +2,7 @@
 set -e
 
 export MLFLOW_ALLOW_FILE_STORE=true
-export CUDA_VISIBLE_DEVICES=1
+export CUDA_VISIBLE_DEVICES=4
 
 cd "$(dirname "$0")/../.."
 
@@ -39,8 +39,22 @@ run_batch() {
 #     configs/label_cond/06_joint_untrained_hard.yaml \
 #     configs/label_cond/07_joint_untrained_soft.yaml
 
+# run_batch \
+#     configs/label_cond/08_hard_emb.yaml \
+#     configs/label_cond/09_hard_emb_deep.yaml \
+#     configs/label_cond/10_joint_scratch_soft_emb.yaml \
+#     configs/label_cond/11_joint_scratch_soft_emb_deep.yaml
+
+# run_batch \
+#     configs/label_cond/12_zero_emb_deep.yaml \
+#     configs/label_cond/13_hard_emb_deep_add.yaml \
+#     configs/label_cond/14_hard_emb_deep_film.yaml
+
+# run_batch \
+#     configs/label_cond/15_frozen_soft_emb_deep.yaml \
+#     configs/label_cond/16_frozen_layer3_emb_deep.yaml \
+#     configs/label_cond/17_frozen_layer4_emb_deep.yaml
+
 run_batch \
-    configs/label_cond/08_hard_emb.yaml \
-    configs/label_cond/09_hard_emb_deep.yaml \
-    configs/label_cond/10_joint_scratch_soft_emb.yaml \
-    configs/label_cond/11_joint_scratch_soft_emb_deep.yaml
+    configs/label_cond/18_frozen_layer3_norm_deep.yaml \
+    configs/label_cond/19_frozen_layer4_norm_deep.yaml
