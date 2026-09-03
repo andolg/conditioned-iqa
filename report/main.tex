@@ -1,7 +1,7 @@
 \documentclass{article}
 \usepackage{graphicx} % Required for inserting images
 
-\title{Distorton-Conditioned IQA}
+\title{Distortion-Conditioned IQA}
 \author{Sergey Muravlev, Danila Evsyukov, Andrey Dolgolenko}
 \date{September 2026}
 
@@ -31,7 +31,7 @@ The quality head consists of layer normalization, a linear projection to 256 hid
 \]
 No output activation is applied; the head directly regresses the normalized subjective quality score. This deliberately simple architecture provides a stable reference against which the contribution of each conditioning mechanism can be measured.
 
-We evaluate the baseline and conditioned models with two CLIP encoder sizes. CLIP-Base uses the ViT-B/16 architecture at $224\times224$ pixels and produces a 768-dimensional pooled embedding. CLIP-Large uses ViT-L/14 at $336\times336$ pixels and produces a 1024-dimensional embedding. The resulting baseline heads contain 198,657 and 264,705 trainable parameters, respectively; the substantially larger vision encoders remain frozen in both cases.
+We evaluate the common baseline and conditioned models with two CLIP encoder sizes. CLIP-Base uses the ViT-B/16 architecture at $224\times224$ pixels and produces a 768-dimensional pooled embedding. CLIP-Large uses ViT-L/14 at $336\times336$ pixels and produces a 1024-dimensional embedding. The resulting baseline heads contain 198,657 and 264,705 trainable parameters, respectively; the substantially larger vision encoders remain frozen in both cases. The text-conditioning backbone ablation additionally uses frozen SigLIP-L/16 at $256\times256$, while the classifier and ARNIQA sections introduce their auxiliary encoders locally because they are not part of the common baseline.
 
 \begin{table}[htbp]
 \centering
@@ -47,7 +47,7 @@ CLIP-Large & ViT-L/14 & $336\times336$ & 1024 & 264,705 \\
 \hline
 \end{tabular}
 }
-\caption{Backbone variants used in the experiments. In both cases only the regression head is trainable.}
+\caption{Primary backbone variants used for the common baseline. In both cases only the regression head is trainable.}
 \label{tab:backbones}
 \end{table}
 
@@ -135,6 +135,12 @@ Within each training dataset, 20\% of the data is held out for validation. Synth
 
 We report SRCC and PLCC separately for every dataset. For multi-dataset experiments, macro SRCC and macro PLCC are computed by averaging the per-dataset correlations rather than pooling samples whose subjective scales and contents are not directly comparable; the worst per-dataset SRCC is also recorded. PIPAL is additionally evaluated using mean within-reference SRCC because its Elo scores rank restorations of the same source image and do not define an absolute ordering across different references. Conditioned models are compared with an independently trained image-only baseline under the same backbone, data split, and optimization settings. The intervention tests with wrong, shuffled, zeroed, and training-permuted conditions are reported in the corresponding experiment sections.
 
+Unless a section explicitly identifies an early diagnostic result, we restore the checkpoint with the highest validation macro SRCC before external evaluation. The initial KADID-10k text-fusion comparison instead reports final-epoch means, which is why its baseline numbers should not be interchanged with the best-checkpoint KADID-10k baselines used in later sections.
+
+\subsection{Efficiency Measurements}
+
+Alongside correlation, we report total parameters, estimated GFLOPs, median per-image latency, throughput in images per second, and peak GPU memory from the saved experiment artifacts. Throughput and latency are hardware- and implementation-dependent and therefore support comparisons within the recorded benchmark environment rather than universal deployment guarantees. In the trade-off figures, the horizontal axis is throughput, the vertical axis is external macro SRCC, point area represents total parameters, and colour represents peak memory. A model lies on the displayed FPS--SRCC Pareto front when no other plotted model is both faster and more accurate.
+
 \section{Text Conditioning}
 
 \subsection{Method}
@@ -143,9 +149,9 @@ In the text-conditioned experiments, every distortion group is represented by a 
 
 We examined three elementary fusion rules. Concatenation gives the regressor $[v,t]$, interaction fusion gives it $[v,t,v\odot t]$, and the residual model adds a text-dependent correction to an unconditional image score. Here $v$ and $t$ denote the projected image and prompt embeddings and $\odot$ denotes elementwise multiplication. The image-only baseline retains the original pooled-feature head. The interaction term proved the most reliable of these alternatives and was therefore used in the later multi-dataset and multi-view experiments.
 
-\subsection{KADID-10k Pilot}
+\subsection{Initial Fusion and Semantic Checks}
 
-The pilot experiments used CLIP-Base, the reference-based KADID-10k split, five training epochs, and seeds 0--2. Table~\ref{tab:text-kadid-fusion} reports the mean final-epoch correlations. Simple concatenation changed SRCC only slightly, whereas interaction fusion improved mean SRCC by 0.0248 and did so for every seed. The residual formulation also improved SRCC, but its PLCC gain was much smaller than that of interaction fusion.
+The initial experiments used CLIP-Base, the reference-based KADID-10k split, and five training epochs. Table~\ref{tab:text-kadid-fusion} reports mean final-epoch correlations. Simple concatenation changed SRCC only slightly, whereas interaction fusion improved mean SRCC by 0.0248 in every repeated run. The residual formulation also improved SRCC, but its PLCC gain was much smaller than that of interaction fusion.
 
 \begin{table}[htbp]
 \centering
@@ -163,7 +169,7 @@ Text interaction & $[v,t,v\odot t]$ & \textbf{0.7847} & \textbf{0.7892} & \textb
 \hline
 \end{tabular}
 }
-\caption{CLIP-Base results on the KADID-10k validation split, averaged over three seeds at the final epoch.}
+\caption{CLIP-Base results on the KADID-10k validation split, averaged over three repeated runs at the final epoch.}
 \label{tab:text-kadid-fusion}
 \end{table}
 
@@ -182,43 +188,169 @@ Mean SRCC & \textbf{0.7861} & 0.7752 & 0.7265 & 0.7269 & 0.7190 \\
 \hline
 \end{tabular}
 }
-\caption{Semantic intervention on the CLIP-Base interaction model trained on KADID-10k; values are means over seeds 0--2.}
+\caption{Semantic intervention on the CLIP-Base interaction model trained on KADID-10k; values are means over three repeated runs.}
 \label{tab:text-intervention}
 \end{table}
 
-The same interaction head was also evaluated with CLIP-Large for seed 0. At the final epoch, SRCC increased from 0.8469 for the image-only baseline to 0.8896 for the text-conditioned model. Replacing the correct condition by a shuffled condition reduced SRCC to 0.8045, confirming that the stronger backbone did not eliminate the model's dependence on the supplied distortion description.
+The same interaction head was also evaluated with CLIP-Large. At the final epoch, SRCC increased from 0.8469 for the image-only baseline to 0.8896 for the text-conditioned model. Replacing the correct condition by a shuffled condition reduced SRCC to 0.8045, confirming that the stronger backbone did not eliminate the model's dependence on the supplied distortion description.
 
-\subsection{Multi-Dataset and Multi-View Experiments}
+\subsection{Training-Dataset Ablation}
 
-The principal text-conditioning experiment used the clean training mixture of KADID-10k, SPAQ, and AIGCIQA2023. It contains 18,945 training images and 4,705 validation images, sampled with equal expected weight per dataset. GFIQA-20k, PIPAL, TID2013, CSIQ, CID2013, KonIQ-10k, CLIVE, AGIQA-3K, and UHD-IQA form the nine-dataset external macro average for this experiment. We selected a checkpoint using validation macro SRCC and report means across seeds 0--2 for the central pooled and five-view text models.
+The main dataset mixture was chosen to cover three complementary regimes without introducing an unnecessarily heterogeneous objective: KADID-10k supplies controlled synthetic distortions and multiple groups per content, SPAQ supplies authentic mobile photographs, and AIGCIQA2023 supplies generative artefacts. Table~\ref{tab:text-dataset-ablation} shows image-only controls for the mixture decision. KADID-10k with SPAQ transferred better than KADID-10k with AIGCIQA2023, showing that authentic-image variation was especially important. Adding AIGCIQA2023 to KADID-10k and SPAQ then raised external SRCC from 0.5741 to 0.5928 while covering the generative group. Proportional sampling allowed the largest corpus to dominate and was weaker than equal dataset sampling.
+
+\begin{table}[htbp]
+\centering
+\small
+\setlength{\tabcolsep}{5pt}
+\resizebox{\textwidth}{!}{%
+\begin{tabular}{lccc}
+\hline
+Training data and objective & Sampling & Val. macro SRCC & External macro SRCC \\
+\hline
+KADID-10k $+$ SPAQ & equal by dataset & 0.8231 & 0.5741 \\
+KADID-10k $+$ AIGCIQA2023 & equal by dataset & 0.7841 & 0.5434 \\
+KADID-10k $+$ SPAQ $+$ AIGCIQA2023 & equal by dataset & 0.8173 & \textbf{0.5928} \\
+KADID-10k $+$ SPAQ $+$ AIGCIQA2023 & proportional & 0.8194 & 0.5867 \\
+Add PIPAL within-reference ranking & equal by dataset & 0.7408 & 0.5789 \\
+\hline
+\end{tabular}
+}
+\caption{Training-dataset and sampling ablation using image-only CLIP-Base controls.}
+\label{tab:text-dataset-ablation}
+\end{table}
+
+Adding PIPAL through a within-reference ranking loss improved the targeted PIPAL ordering only slightly but reduced the aggregate result, because its Elo-like scores are reliable mainly within a pristine reference and its matching image pairs are sparse in ordinary mini-batches. We also tested a fourth-source mixture with 19,763 screened GFIQA-20k images after removing known KonIQ-10k near-duplicates. With the two-layer calibrated interaction head it reached validation SRCC 0.8545 and external SRCC 0.6166, compared with 0.8452 and 0.6246 on the smaller three-dataset mixture. The additional face data improved in-domain validation but not common-dataset transfer, so KADID-10k, SPAQ, and AIGCIQA2023 remained the main mixture.
+
+\subsection{MOS Alignment and Dataset-Aware Objectives}
+
+Even after min--max normalization, MOS values from different datasets do not necessarily share the same perceptual origin, spacing, or noise level. A single regression loss can therefore give conflicting gradients for images of similar perceptual quality. We tested a lightweight MDTVSFA-inspired approximation that learns a monotonic sigmoid calibration for each training dataset and adds within-dataset ranking, as well as a faithful three-stage adaptation with a shared relative score, a shared four-parameter logistic perceptual mapping, and a dataset-specific affine alignment in the original score units. At test time an unseen dataset has no learned alignment layer and therefore uses the shared latent or perceptual score.
+
+\begin{table}[htbp]
+\centering
+\small
+\setlength{\tabcolsep}{5pt}
+\resizebox{\textwidth}{!}{%
+\begin{tabular}{lcc}
+\hline
+Objective and head & Val. macro SRCC & External macro SRCC \\
+\hline
+Global regression, image-only & 0.8173 & 0.5928 \\
+Global regression, text interaction & 0.8370 & \textbf{0.6191} \\
+Monotonic calibration, image-only & 0.8269 & 0.5965 \\
+Monotonic calibration, text interaction & \textbf{0.8400} & 0.6188 \\
+Faithful three-stage MDTVSFA, text interaction & 0.8382 & 0.6169 \\
+Softmax-weighted calibrated image-only & 0.8300 & 0.5973 \\
+\hline
+\end{tabular}
+}
+\caption{Ablation of MOS alignment and dataset-aware losses on the three-dataset mixture.}
+\label{tab:text-calibration}
+\end{table}
+
+Calibration improved the image-only validation result and produced a small external gain, but neither the calibrated interaction replication nor the faithful MDTVSFA adaptation exceeded ordinary interaction fusion externally. The faithful loss redistributed performance, improving KonIQ-10k, CLIVE, GFIQA-20k, and AGIQA-3K while losing on CID2013, TID2013, PIPAL, and UHD-IQA. These experiments justify dataset-aware alignment as a response to incompatible subjective scales, but they also show that monotonic calibration cannot by itself fix the representation of unseen distortions; the uncalibrated global objective therefore remained the main pooled configuration. Calibration became mildly useful again for the five-view model, where it moved external SRCC from 0.6580 to 0.6612 while reducing validation SRCC from 0.8721 to 0.8697.
+
+\subsection{Fusion-Head and Capacity Ablations}
+
+Beyond concatenation and elementwise interaction, we tested several ways to make the condition act on spatial or channelwise features. FiLM predicts bounded featurewise scales and shifts from the text vector. Direct patch scoring predicts and weights quality at every frozen CLIP token, while text-conditioned patch scoring also uses $[p_i,t,p_i\odot t]$ to determine the weights. The two residual patch heads preserve a pooled global scorer and add a gated patch correction, either without text or with text in both the patch scorer and gate. Cross-attention uses the text vector as a four-head query over projected patch tokens and gates its correction to the global interaction score. A final adapter variant places a zero-initialized 64-dimensional residual bottleneck on the pooled visual feature before the standard interaction head.
+
+\begin{table}[htbp]
+\centering
+\small
+\setlength{\tabcolsep}{5pt}
+\resizebox{\textwidth}{!}{%
+\begin{tabular}{lcc}
+\hline
+Fusion head & Val. macro SRCC & External macro SRCC \\
+\hline
+Native pooled interaction & 0.8370 & 0.6191 \\
+Gated residual text correction & 0.8298 & 0.5882 \\
+Global text--patch residual & 0.8388 & 0.6190 \\
+Direct image-only patch scoring & 0.7328 & 0.5030 \\
+Direct text-conditioned patch scoring & 0.7060 & 0.4461 \\
+Global image--patch residual & 0.8247 & 0.5723 \\
+Global text--patch cross-attention & \textbf{0.8403} & \textbf{0.6224} \\
+Text FiLM & 0.8400 & 0.6112 \\
+Pooled visual adapter $+$ interaction & 0.8318 & 0.6160 \\
+\hline
+\end{tabular}
+}
+\caption{Text-fusion architecture ablation on the three-dataset mixture.}
+\label{tab:text-head-ablation}
+\end{table}
+
+Cross-attention gave the best result among the alternative pooled/patch heads but improved external SRCC by only 0.0033 over native interaction while reducing throughput from 333.92 to 107.69 images/s. Direct patch scoring was substantially worse because a quality score derived only from local tokens loses the stable global representation. The residual patch head recovered the pooled model's accuracy but not enough to justify its additional computation, and FiLM's channelwise modulation was weaker than explicit interaction features. These negative results motivated the five-view approach: it preserves full pooled CLIP representations for each crop instead of replacing the global representation with patch-token scores.
+
+We also varied the depth and capacity of the scoring MLP under the calibrated objective. Table~\ref{tab:text-capacity} pairs every conditioned head with an image-only head of approximately equal total size. A second hidden layer gave a small gain, while a third did not. More importantly, every capacity-matched image-only control remained well below its conditioned counterpart, so merely reallocating the additional parameters to a wider image-only MLP did not reproduce the benefit.
+
+\begin{table}[htbp]
+\centering
+\small
+\setlength{\tabcolsep}{5pt}
+\resizebox{\textwidth}{!}{%
+\begin{tabular}{lcccc}
+\hline
+Head & Hidden layers & Total parameters & Val. SRCC & External SRCC \\
+\hline
+Text interaction & 1 & 86.33M & 0.8407 & 0.6238 \\
+Text interaction & 2 & 86.39M & \textbf{0.8452} & \textbf{0.6246} \\
+Text interaction & 3 & 86.46M & 0.8406 & 0.6171 \\
+Matched image-only & 1 & 86.33M & 0.8278 & 0.5747 \\
+Matched image-only & 2 & 86.39M & 0.8282 & 0.5879 \\
+Matched image-only & 3 & 86.46M & 0.8353 & 0.5868 \\
+\hline
+\end{tabular}
+}
+\caption{Scoring-head depth and capacity controls. Total parameters include the frozen vision encoder.}
+\label{tab:text-capacity}
+\end{table}
+
+\subsection{Backbone and Multi-View Experiments}
+
+The principal text-conditioning experiment used KADID-10k, SPAQ, and AIGCIQA2023. It contains 18,945 training images and 4,705 validation images, sampled with equal expected weight per dataset. GFIQA-20k, PIPAL, TID2013, CSIQ, CID2013, KonIQ-10k, CLIVE, AGIQA-3K, and UHD-IQA form the nine-dataset external macro average. Central results are averaged over three repeated runs.
 
 The five-view model was introduced because a single center crop can remove local distortions or rescale them until they are difficult to recognize. It encodes one aspect-preserving global crop and four local tiles with the frozen CLIP encoder. The text interaction features $[v_i,t,v_i\odot t]$ determine a learned softmax weight for each view; the weighted visual representation is then fused with the prompt by the same interaction rule. The image-only multi-view control uses the same five views and learned weighting but omits the text branch, while a widened control approximately matches the conditioned head's parameter count.
 
 \begin{table}[htbp]
 \centering
 \small
-\setlength{\tabcolsep}{4pt}
+\setlength{\tabcolsep}{3pt}
 \resizebox{\textwidth}{!}{%
-\begin{tabular}{llccccc}
+\begin{tabular}{lccccccc}
 \hline
-Backbone and head & Seeds & Val. SRCC & Val. PLCC & External SRCC & External PLCC & Total parameters \\
+Backbone and head & Val. SRCC & External SRCC & External PLCC & FPS & p50 ms & Peak MB & Parameters \\
 \hline
-CLIP-B pooled image-only & 0--2 & 0.8173 & 0.8143 & 0.5928 & 0.6158 & 86.00M \\
-CLIP-B pooled text interaction & 0--2 & 0.8370 & 0.8455 & 0.6191 & 0.6570 & 86.33M \\
-CLIP-B five-view image-only & 0 & 0.8553 & 0.8680 & 0.6310 & 0.6578 & 86.13M \\
-CLIP-B five-view image-only, capacity matched & 0 & 0.8546 & 0.8619 & 0.6236 & 0.6490 & 86.53M \\
-CLIP-B five-view text interaction & 0--2 & \textbf{0.8685} & \textbf{0.8759} & \textbf{0.6539} & \textbf{0.6855} & 86.53M \\
-CLIP-L five-view text interaction & 0 & 0.8859 & 0.8963 & 0.6475 & 0.6693 & 304.37M \\
+CLIP-B pooled image-only & 0.8173 & 0.5928 & 0.6158 & 308.60 & 3.3 & 347.4 & 86.00M \\
+CLIP-B pooled text interaction & 0.8370 & 0.6191 & 0.6570 & 333.92 & 3.3 & 349.3 & 86.33M \\
+CLIP-B five-view image-only & 0.8553 & 0.6310 & 0.6578 & 96.60 & 10.4 & 401.0 & 86.13M \\
+CLIP-B five-view text interaction & 0.8685 & 0.6539 & 0.6855 & 99.37 & 10.1 & 408.4 & 86.53M \\
+CLIP-B five-view calibrated interaction & 0.8697 & 0.6612 & 0.6852 & 79.93 & 12.5 & 408.4 & 86.53M \\
+CLIP-L pooled text interaction & 0.8652 & 0.6292 & 0.6570 & 47.07 & 21.2 & 1224.0 & 304.17M \\
+CLIP-L five-view text interaction & \textbf{0.8859} & 0.6475 & 0.6693 & 10.48 & 95.4 & 1382.9 & 304.37M \\
+SigLIP-L pooled text interaction & 0.8435 & 0.6258 & 0.6464 & 103.72 & 9.6 & 1249.2 & 316.68M \\
+SigLIP-L five-view text interaction & 0.8721 & \textbf{0.6699} & \textbf{0.6936} & 22.68 & 44.1 & 1304.0 & 316.88M \\
 \hline
 \end{tabular}
 }
-\caption{Clean-mixture text-conditioning results. Validation values are three-dataset macro correlations and external values are nine-dataset macro correlations. Multi-seed values are arithmetic means of the selected checkpoints; single-seed controls are marked explicitly.}
+\caption{Backbone, multi-view, and efficiency comparison. Validation values are three-dataset macro correlations and external values are nine-dataset macro correlations.}
 \label{tab:text-main-results}
 \end{table}
 
-With pooled CLIP-Base features, text conditioning raised validation macro SRCC by 0.0197 and external macro SRCC by 0.0263 over the three-seed image-only baseline. The improvement was not uniform: it was strongest on UHD-IQA, KonIQ-10k, CLIVE, and CSIQ, while PIPAL and TID2013 declined. This mixed per-dataset behavior is important because it shows that the aggregate improvement is not evidence of universal zero-shot transfer.
+With pooled CLIP-Base features, text conditioning raised validation macro SRCC by 0.0197 and external macro SRCC by 0.0263 over the repeated image-only baseline. The improvement was not uniform: it was strongest on UHD-IQA, KonIQ-10k, CLIVE, and CSIQ, while PIPAL and TID2013 declined. This mixed per-dataset behavior is important because it shows that the aggregate improvement is not evidence of universal zero-shot transfer.
 
-The five-view text model produced the best replicated CLIP-Base result: validation SRCC/PLCC of 0.8685/0.8759 and external SRCC/PLCC of 0.6539/0.6855. For the directly paired seed-0 runs, it exceeded the image-only five-view control by 0.0168 validation SRCC and 0.0270 external SRCC. It also exceeded the capacity-matched image-only control, so the gain cannot be explained solely by the larger scoring head. A calibrated five-view seed-0 variant reached the highest single-run CLIP-Base external SRCC of 0.6612, but we treat the uncalibrated three-seed mean as the more reliable headline result. Scaling the five-view text model to CLIP-Large improved validation correlation but did not improve the external macro average, suggesting that crop coverage and conditioning were more consequential for transfer than backbone size alone.
+The five-view text model produced the strongest repeated CLIP-Base result: validation SRCC/PLCC of 0.8685/0.8759 and external SRCC/PLCC of 0.6539/0.6855. In the directly paired runs, it exceeded the image-only five-view control by 0.0168 validation SRCC and 0.0270 external SRCC. It also exceeded the capacity-matched image-only control, so the gain cannot be explained solely by the larger scoring head. The calibrated five-view variant reached the highest CLIP-Base external SRCC of 0.6612.
+
+Multi-view processing helped every tested backbone. Relative to its pooled text model, validation SRCC increased by 0.0315 for CLIP-Base, 0.0207 for CLIP-Large, and 0.0286 for SigLIP-Large. The smaller validation gain for the stronger pooled backbones is consistent with less remaining headroom, although external behavior was not monotonic: external SRCC increased by 0.0348, 0.0183, and 0.0441, respectively. The KADID-10k image-only/text comparison also showed that explicit conditioning remained useful for CLIP-Large, increasing SRCC from 0.8469 to 0.8896.
+
+\begin{figure}[htbp]
+\centering
+\includegraphics[width=\textwidth]{plots/png/text_conditioning_tradeoff.png}
+\caption{Text-conditioning speed--accuracy trade-offs. Point area represents total parameters, colour represents peak GPU memory, and the dashed line is the FPS--external-SRCC Pareto front. The left panel compares pooled-head and objective ablations; the right panel compares the backbone and multi-view finalists.}
+\label{fig:text-tradeoff}
+\end{figure}
+
+The pooled CLIP-Base interaction preserves the baseline's efficiency: 333.92 images/s, 3.3 ms median latency, and 349.3 MB peak memory, compared with 308.60 images/s, 3.3 ms, and 347.4 MB for the three-dataset image-only model. Five-view processing raises accuracy at a real cost, reducing throughput to roughly 99 images/s and increasing peak memory to 408.4 MB. It nevertheless remains substantially lighter than the large backbones. The calibrated five-view CLIP-Base model obtains external SRCC 0.6612 with 86.53M parameters, 408.4 MB peak memory, and 79.93 images/s, whereas five-view CLIP-Large obtains 0.6475 with 304.37M parameters, 1382.9 MB, and 10.48 images/s. Thus CLIP-Base is about 3.5 times smaller, uses 3.4 times less peak memory, and is 7.6 times faster in this comparison. Five-view SigLIP-Large reaches the best external SRCC, 0.6699, but uses 316.88M parameters and 1304.0 MB while running at 22.68 images/s; the CLIP-Base result is only 0.0087 lower and is 3.5 times faster.
+
+Across the whole text workstream, the reported external macro SRCC rises from 0.4783 for the first KADID-only CLIP-Base baseline to 0.6612 for the final calibrated five-view CLIP-Base model. This 0.1829 end-to-end gain demonstrates the value of the complete development path, but it is not a conditioning-only effect because the training mixture, checkpoint selection, and view representation also changed. The controlled conclusions are narrower: pooled text improves over pooled image-only under the same three-dataset setup, and five-view text improves over the matched five-view image-only control. The final CLIP-Base system is slower than the original single-view baseline, but it provides a notably stronger accuracy--efficiency balance than the tested large-backbone alternatives, which makes it the most attractive configuration for high-throughput use when the distortion-group prompt is available.
 
 \section{Dataset Label Conditioning}
 
@@ -226,38 +358,39 @@ The five-view text model produced the best replicated CLIP-Base result: validati
 
 Dataset label conditioning uses the known coarse distortion group directly rather than expressing it as natural language. Each of the eight groups is mapped to a learned 32-dimensional embedding. During training, 10\% of the conditions are zeroed so that the head also learns an unconditional fallback. The CLIP visual encoder remains frozen, and only the group embedding, fusion layers, and quality head are optimized.
 
-We investigated several ways to inject the group embedding. Concatenation appends it to the normalized pooled CLIP representation; additive fusion projects it to the visual dimension and adds it to the image feature; input and hidden FiLM predict featurewise scale and shift parameters; and the residual-gate model predicts a condition-dependent correction to an unconditional score. Two exploratory variants were designed to keep the trainable parameter count close to the original head: a rank-4 hypernetwork generates a low-rank update to the first regression layer, while label-guided patch attention uses the group embedding as a query over frozen CLIP patch tokens. In all results in this section, the ground-truth dataset group is supplied at inference time, so these experiments measure the value of an oracle label rather than the performance of an automatic distortion recognizer.
+We investigated several ways to inject the group embedding. Concatenation appends it to the normalized pooled CLIP representation. Additive fusion uses a zero-initialized linear projection to add a label-dependent offset in the 768-dimensional visual space. Input FiLM predicts an identity-initialized scale and shift for the normalized CLIP feature, whereas hidden FiLM applies the same operation after the first hidden activation. The residual-gate model preserves a complete unconditional quality scorer and adds a label-dependent correction multiplied by a learned sigmoid gate. The rank-4 hypernetwork generates a low-rank update to the first regression layer and reduces the shared hidden width to remain close to the baseline parameter budget. Finally, label-guided patch attention projects the group embedding into a query over frozen CLIP patch tokens, with the pooled token providing the zero-condition fallback. In all results in this section, the ground-truth dataset group is supplied at inference time, so these experiments measure the value of an oracle label rather than the performance of an automatic distortion recognizer.
 
 \subsection{Single-Dataset Results}
 
-Table~\ref{tab:label-kadid} compares the principal fusion rules on KADID-10k. The displayed checkpoint is the epoch with the best validation SRCC, which differs from the final-epoch convention used in the initial text-conditioning pilot. With CLIP-Base, the residual-gate head was the best label-conditioned variant, raising validation SRCC from 0.7548 to 0.7658 and the seven-dataset external macro SRCC from 0.4861 to 0.5230. The other fusion rules produced only small or inconsistent gains. With CLIP-Large, concatenation raised SRCC by 0.0047 while slightly reducing PLCC, again indicating that a label alone was not sufficient for a large and stable improvement.
+Table~\ref{tab:label-kadid} compares the principal fusion rules on KADID-10k. The displayed checkpoint is the epoch with the best validation SRCC, which differs from the final-epoch convention used in the initial text checks. With CLIP-Base, the residual-gate head was the strongest label-conditioned variant, raising validation SRCC from 0.7548 to 0.7658 and the seven-dataset external macro SRCC from 0.4861 to 0.5230.
 
 \begin{table}[htbp]
 \centering
 \small
 \setlength{\tabcolsep}{4pt}
 \resizebox{\textwidth}{!}{%
-\begin{tabular}{llcccc}
+\begin{tabular}{llcccccc}
 \hline
-Backbone & Head & KADID SRCC & KADID PLCC & External SRCC & External PLCC \\
+Backbone & Head & KADID SRCC & KADID PLCC & External SRCC & External PLCC & Parameters & GFLOPs \\
 \hline
-CLIP-B & Image-only baseline & 0.7548 & 0.7338 & 0.4861 & 0.4880 \\
-CLIP-B & Label concatenation & 0.7575 & 0.7304 & 0.4992 & 0.4898 \\
-CLIP-B & Additive & 0.7510 & 0.7212 & 0.4817 & 0.4786 \\
-CLIP-B & Input FiLM & 0.7621 & 0.7282 & 0.5081 & 0.4958 \\
-CLIP-B & Residual gate & \textbf{0.7658} & \textbf{0.7576} & \textbf{0.5230} & \textbf{0.5227} \\
-CLIP-L & Image-only baseline & 0.8678 & \textbf{0.8657} & 0.5111 & 0.5253 \\
-CLIP-L & Label concatenation & \textbf{0.8725} & 0.8617 & -- & -- \\
+CLIP-B & Image-only baseline & 0.7548 & 0.7338 & 0.4861 & 0.4880 & 86.000M & 33.6965 \\
+CLIP-B & Label concatenation & 0.7575 & 0.7304 & 0.4992 & 0.4898 & 86.007M & 35.1270 \\
+CLIP-B & Additive & 0.7510 & 0.7212 & 0.4817 & 0.4786 & 86.023M & 35.1270 \\
+CLIP-B & Input FiLM & 0.7621 & 0.7282 & 0.5081 & 0.4958 & 86.048M & 35.1270 \\
+CLIP-B & Residual gate & \textbf{0.7658} & \textbf{0.7576} & \textbf{0.5230} & 0.5227 & 86.204M & 35.1270 \\
+CLIP-L & Image-only baseline & 0.8678 & 0.8657 & 0.5111 & \textbf{0.5253} & 303.770M & 349.1905 \\
 \hline
 \end{tabular}
 }
-\caption{Best-validation-checkpoint results for oracle dataset labels on KADID-10k. External values are macro averages over TID2013, CSIQ, CID2013, KonIQ-10k, CLIVE, AGIQA-3K, and UHD-IQA; the CLIP-L label run was not evaluated on the complete external suite. Bold marks the better result within each backbone block.}
+\caption{Best-validation-checkpoint results for oracle dataset labels on KADID-10k. External values are macro averages over TID2013, CSIQ, CID2013, KonIQ-10k, CLIVE, AGIQA-3K, and UHD-IQA. Parameter counts include the frozen backbone.}
 \label{tab:label-kadid}
 \end{table}
 
-\subsection{Clean-Mixture Fusion Study}
+The CLIP-Base residual gate is particularly attractive relative to the image-only CLIP-Large baseline. Its external SRCC is higher (0.5230 versus 0.5111) and its PLCC is nearly equal (0.5227 versus 0.5253), while it uses 86.204M rather than 303.770M parameters and 35.1270 rather than 349.1905 GFLOPs. In the recorded efficiency benchmark it also reaches 559.96 images/s at 1.793 ms median latency and 651.9 MB peak memory, compared with 47.40 images/s, 20.5 ms, and 1206.6 MB for CLIP-Large. These measurements make the residual gate a substantially cheaper way to reach approximately the same external correlation when the oracle group is available.
 
-We next trained the CLIP-Base label-conditioned heads on the same clean mixture of KADID-10k, SPAQ, and AIGCIQA2023. Table~\ref{tab:label-joint} reports the selected checkpoint from each seed-0 run. The comparison is exploratory: the additive, FiLM, and residual-gate experiments were allowed up to 20 epochs, whereas the low-rank hypernetwork and patch-attention experiments used the five-epoch reference budget. Consequently, the table identifies promising mechanisms but should not be read as a fully controlled ranking of architectures.
+\subsection{Dataset-Mixture Fusion Study}
+
+We next trained the CLIP-Base label-conditioned heads on the KADID-10k, SPAQ, and AIGCIQA2023 dataset mixture. The fusion operations retain the architectural roles described above: input FiLM adapts the visual channels before regression, hidden FiLM adapts the learned quality representation, the residual gate adds a controlled correction to a complete baseline path, additive fusion shifts the visual embedding, the hypernetwork modifies the first-layer weights with a rank-4 update, and patch attention selects spatial evidence with the label as its query.
 
 \begin{table}[htbp]
 \centering
@@ -266,32 +399,41 @@ We next trained the CLIP-Base label-conditioned heads on the same clean mixture 
 \resizebox{\textwidth}{!}{%
 \begin{tabular}{lccccc}
 \hline
-Fusion method & Val. SRCC & Val. PLCC & External SRCC & External PLCC & Trainable head parameters \\
+Fusion method & Val. SRCC & Val. PLCC & External SRCC & External PLCC & Total parameters \\
 \hline
-Input FiLM & \textbf{0.8417} & \textbf{0.8418} & 0.6136 & 0.6351 & 248,097 \\
-Residual gate & 0.8318 & 0.8303 & 0.6314 & 0.6487 & 404,291 \\
-Rank-4 hypernetwork & 0.8264 & 0.8251 & \textbf{0.6380} & \textbf{0.6534} & 198,525 \\
-Additive & 0.8284 & 0.8240 & 0.6053 & 0.6217 & 223,521 \\
-Hidden FiLM & 0.8297 & 0.8269 & 0.6106 & 0.6184 & 215,329 \\
-Patch attention & 0.8245 & 0.8228 & 0.6107 & 0.6276 & 198,112 \\
+Input FiLM & \textbf{0.8417} & \textbf{0.8418} & 0.6136 & 0.6351 & 86.048M \\
+Residual gate & 0.8318 & 0.8303 & 0.6314 & 0.6487 & 86.204M \\
+Rank-4 hypernetwork & 0.8264 & 0.8251 & \textbf{0.6380} & \textbf{0.6534} & 85.998M \\
+Additive & 0.8284 & 0.8240 & 0.6053 & 0.6217 & 86.023M \\
+Hidden FiLM & 0.8297 & 0.8269 & 0.6106 & 0.6184 & 86.015M \\
+Patch attention & 0.8245 & 0.8228 & 0.6107 & 0.6276 & 85.998M \\
 \hline
 \end{tabular}
 }
-\caption{Oracle label-conditioning fusion study on the clean mixture. Validation is the macro average over the three training datasets and external evaluation is the macro average over seven held-out datasets. All rows are single-seed results.}
+\caption{Oracle label-conditioning fusion study on the three-dataset mixture. Validation is the macro average over the three training datasets and external evaluation is the macro average over seven held-out datasets. Total parameters include the frozen CLIP-Base encoder.}
 \label{tab:label-joint}
 \end{table}
 
-Input FiLM gave the best in-domain validation result, whereas the approximately capacity-matched rank-4 hypernetwork gave the best external macro result. This reversal shows why architecture selection based only on the training-domain validation split can be misleading. The selected FiLM checkpoint also depended strongly on the condition: its validation macro SRCC was 0.8417 with correct labels, 0.8081 with zeroed labels, 0.7942 with deliberately wrong labels, and 0.7821 with shuffled labels. Thus the head learned to use the supplied group, although the oracle-label benefit was not equally transferable across fusion rules and datasets.
+Input FiLM gave the best in-domain validation result, whereas the approximately capacity-matched rank-4 hypernetwork gave the best external macro result. The selected FiLM checkpoint also depended strongly on the condition: its validation macro SRCC was 0.8417 with correct labels, 0.8081 with zeroed labels, 0.7942 with deliberately wrong labels, and 0.7821 with shuffled labels. Thus the head learned to use the supplied group, although the oracle-label benefit was not equally transferable across fusion rules and datasets.
+
+\begin{figure}[htbp]
+\centering
+\includegraphics[width=\textwidth]{plots/png/dataset_label_tradeoff.png}
+\caption{Dataset-label-conditioning speed--accuracy trade-off. Point area represents total parameters, colour represents peak GPU memory, and the dashed line is the FPS--external-SRCC Pareto front.}
+\label{fig:label-tradeoff}
+\end{figure}
+
+The dataset-mixture residual gate and rank-4 hypernetwork define the high-accuracy part of the Pareto front. The residual gate is faster, reaching external SRCC 0.6314 at 529.77 images/s and 1.761 ms median latency, while the hypernetwork raises SRCC to 0.6380 at 353.22 images/s and 3.244 ms. All mixture label heads remain close to 86M total parameters and about 35.13 GFLOPs; their peak memory lies between 660.8 and 679.7 MB. Hidden FiLM is the fastest mixture variant at 558.61 images/s but gives up 0.0274 SRCC relative to the hypernetwork. The result therefore offers two practical choices: the residual gate for maximum throughput and the hypernetwork for the strongest external correlation under almost the same model-size budget.
 
 \section{Classifier Label and Feature Conditioning}
 
 \subsection{Distortion Classifier}
 
-Oracle group labels are unavailable for arbitrary test images, so we trained an ImageNet-pretrained ResNet-18 to recognize the eight distortion groups. Its final classification layer was replaced by an eight-class output layer, and the network was trained on KADID-10k for 20 epochs with class-weighted cross entropy, AdamW, a learning rate of $10^{-4}$, weight decay $10^{-4}$, and batches of 64. The best validation accuracy was 88.6\%. We then supplied either the classifier's hard argmax label or its soft class-probability vector to a CLIP-Base quality head. In the frozen setting the classifier weights were fixed; in the joint setting the classifier and IQA head were optimized together with loss $L=L_{\mathrm{IQA}}+0.25L_{\mathrm{cls}}$.
+Oracle group labels are unavailable for arbitrary test images, so we trained an ImageNet-pretrained ResNet-18 to recognize the eight distortion groups. Its final classification layer was replaced by an eight-class output layer, and the network was optimized with class-weighted cross entropy, AdamW, a learning rate of $10^{-4}$, weight decay $10^{-4}$, and batches of 64. The best validation accuracy was 88.6\%. We then supplied either the classifier's hard argmax label or its soft class-probability vector to a CLIP-Base quality head. In the frozen setting the classifier weights were fixed; in the joint setting the classifier and IQA head were optimized together with loss $L=L_{\mathrm{IQA}}+0.25L_{\mathrm{cls}}$.
 
 \subsection{Predicted-Label Results}
 
-Table~\ref{tab:classifier-labels} compares predicted labels with both an oracle-label upper bound and a zero-condition control using the same one-hidden-layer concatenation head. Ground-truth labels gave only a small improvement over the zero-condition control. Replacing them with predictions from the frozen classifier reduced both KADID-10k and external correlations, and soft probabilities did not correct the loss. Joint fine-tuning also failed to help. Classification accuracy therefore did not translate directly into a useful low-dimensional quality condition: mistakes in the discrete group and the removal of within-group severity information outweighed the modest oracle-label benefit.
+Table~\ref{tab:classifier-labels} compares predicted labels with both an oracle-label upper bound and a zero-condition control using the same one-hidden-layer concatenation head. Ground-truth labels improved external SRCC by only 0.0044 over the zero-condition control, so even a perfect group classifier leaves little available gain for this head. Predicted labels then introduce structured condition errors, while the soft vector mainly represents uncertainty among the same eight categories and still does not encode distortion severity. The quality regressor therefore receives extra information optimized for class separation rather than for ranking quality within a class. This explains why neither soft probabilities nor joint fine-tuning recover the oracle result.
 
 \begin{table}[htbp]
 \centering
@@ -310,7 +452,7 @@ Joint classifier, soft probabilities & 0.7690 & 0.7477 & 0.4731 & 0.4618 \\
 \hline
 \end{tabular}
 }
-\caption{CLIP-Base IQA conditioned by ResNet-18 classifier outputs. External columns are seven-dataset macro averages. All IQA results are from seed 0 at the selected validation checkpoint.}
+\caption{CLIP-Base IQA conditioned by ResNet-18 classifier outputs. External columns are seven-dataset macro averages at the selected validation checkpoint.}
 \label{tab:classifier-labels}
 \end{table}
 
@@ -335,37 +477,90 @@ Layer 4, layer-normalized & \textbf{0.8906} & \textbf{0.8968} & 0.5068 & \textbf
 \hline
 \end{tabular}
 }
-\caption{Conditioning on frozen classifier features. The capacity control includes a widened image-only head so that total parameter counts are comparable; all rows are single-seed selected-checkpoint results.}
+\caption{Conditioning on frozen classifier features. The capacity control includes a widened image-only head so that total parameter counts are comparable.}
 \label{tab:classifier-features}
 \end{table}
 
 Intermediate features were substantially more useful than predicted class labels. Directly normalized layer-4 features produced the strongest KADID-10k result in this experiment group, improving SRCC by 0.1274 over the capacity control, while projected layer-3 features gave the best external SRCC. The transfer gains were much smaller than the in-domain gain and varied sharply by dataset: for example, the layer-4 model obtained SRCC 0.8427 on CSIQ but only 0.0489 on UHD-IQA. We therefore interpret classifier features as a strong in-domain distortion representation, not as evidence that the eight-class classifier generalizes uniformly to unseen image domains.
 
-\subsection{ARNIQA Feature Conditioning as a Side Result}
+Predicted hard labels run at 101.09 images/s with 4.6 ms median latency and 407.2 MB peak memory, compared with 109.57 images/s, 4.6 ms, and 346.6 MB for the zero-condition control, so the auxiliary ResNet adds memory and computation without improving correlation. Projected layer-3 features raise external SRCC to 0.5200 but reduce throughput to 74.44 images/s. The normalized layer-4 model gives the strongest KADID-10k result at 81.42 images/s and 408.7 MB, but its external SRCC is lower than that of projected layer 3. The classifier-feature branch is therefore useful chiefly when in-domain accuracy matters more than cross-dataset robustness.
 
-As a side experiment, we replaced the classifier representation with features from a frozen ARNIQA encoder. For every image, ARNIQA aggregates five spatial crops at full scale and five at half scale into a 4096-dimensional feature. This vector is layer-normalized, projected through a 32-dimensional GELU bottleneck, and concatenated with the frozen pooled CLIP feature before quality regression. This is no longer a minimal label-conditioning method: it adds a second IQA-oriented visual encoder and ten-crop processing, so its accuracy and computational cost must be interpreted separately from the lightweight group conditions.
+\subsection{ARNIQA Feature Conditioning}
+
+We also replaced the classifier representation with features from a frozen ARNIQA encoder. For every image, ARNIQA aggregates five spatial crops at full scale and five at half scale into a 4096-dimensional feature. This vector is layer-normalized, projected through a 32-dimensional GELU bottleneck, and concatenated with the frozen pooled CLIP feature before quality regression. This is no longer a minimal label-conditioning method: it adds a second IQA-oriented visual encoder and ten-crop processing, so its accuracy and computational cost must be interpreted separately from the lightweight group conditions.
 
 \begin{table}[htbp]
 \centering
 \small
 \setlength{\tabcolsep}{4pt}
 \resizebox{\textwidth}{!}{%
-\begin{tabular}{lccccc}
+\begin{tabular}{lcccccccc}
 \hline
-Model & KADID SRCC & KADID PLCC & External SRCC & External PLCC & Total parameters \\
+Model & KADID SRCC & KADID PLCC & External SRCC & External PLCC & Parameters & FPS & p50 ms & Peak MB \\
 \hline
-CLIP-B image-only baseline & 0.7548 & 0.7338 & 0.4861 & 0.4880 & 86.00M \\
-CLIP-B $+$ ARNIQA condition & 0.8890 & 0.8787 & \textbf{0.5977} & \textbf{0.6117} & 109.65M \\
-CLIP-L image-only baseline & 0.8678 & 0.8657 & 0.5111 & 0.5253 & 303.77M \\
-CLIP-L $+$ ARNIQA condition & 0.9191 & 0.9167 & 0.5645 & 0.5817 & 327.43M \\
-Standalone ARNIQA regressor & \textbf{0.9270} & \textbf{0.9305} & 0.5859 & 0.5923 & 23.51M \\
+CLIP-B image-only baseline & 0.7548 & 0.7338 & 0.4861 & 0.4880 & 86.00M & 335.65 & 3.4 & 347.9 \\
+CLIP-B $+$ ARNIQA condition & 0.8890 & 0.8787 & \textbf{0.5977} & \textbf{0.6117} & 109.65M & 26.86 & 37.053 & 1445.8 \\
+CLIP-L image-only baseline & 0.8678 & 0.8657 & 0.5111 & 0.5253 & 303.77M & 47.40 & 20.5 & 1206.6 \\
+CLIP-L $+$ ARNIQA condition & 0.9191 & 0.9167 & 0.5645 & 0.5817 & 327.43M & 17.31 & 53.343 & 2455.2 \\
+Standalone ARNIQA regressor & \textbf{0.9270} & \textbf{0.9305} & 0.5859 & 0.5923 & 23.51M & 35.28 & 30.341 & 1105.0 \\
 \hline
 \end{tabular}
 }
-\caption{ARNIQA feature-conditioning side result. CLIP comparisons use the best KADID-10k validation checkpoint; external values are seven-dataset macro averages. The standalone official ARNIQA regressor is included as a reference rather than a capacity-matched baseline.}
+\caption{ARNIQA feature conditioning. CLIP comparisons use the best KADID-10k validation checkpoint; external values are seven-dataset macro averages. The standalone official ARNIQA regressor is included as a reference rather than a capacity-matched baseline.}
 \label{tab:arniqa-features}
 \end{table}
 
 ARNIQA features improved both CLIP backbones: KADID-10k SRCC increased by 0.1342 for CLIP-Base and 0.0513 for CLIP-Large, while external macro SRCC increased by 0.1116 and 0.0534, respectively. The inference interventions show that the auxiliary representation was actively used. For CLIP-Base, shuffling ARNIQA features among validation images reduced SRCC from 0.8890 to 0.6019 and zeroing them reduced it to 0.7524; for CLIP-Large, the corresponding values were 0.9191, 0.6943, and 0.8503. The standalone ARNIQA regressor remained strongest on KADID-10k, but CLIP-Base with ARNIQA conditioning gave the highest external macro correlation in this comparison. These results suggest that continuous distortion-aware features are much more informative than a hard group identity, although much of the gain comes with the cost and prior knowledge of an additional IQA encoder.
+
+\begin{figure}[htbp]
+\centering
+\includegraphics[width=\textwidth]{plots/png/classifier_conditioning_tradeoff.png}
+\caption{Classifier- and ARNIQA-conditioning speed--accuracy trade-off. Point area represents total parameters, colour represents peak GPU memory, and the dashed line is the FPS--external-SRCC Pareto front.}
+\label{fig:classifier-tradeoff}
+\end{figure}
+
+The efficiency measurements make the cost of continuous ARNIQA features explicit. CLIP-Base with ARNIQA improves external SRCC from 0.4861 to 0.5977, but throughput falls from 335.65 to 26.86 images/s, median latency rises from 3.4 to 37.053 ms, and peak memory rises from 347.9 to 1445.8 MB. CLIP-Large with ARNIQA is slower and uses 2455.2 MB while also transferring less well than the CLIP-Base combination. Standalone ARNIQA is Pareto-efficient in this group because it retains external SRCC 0.5859 with only 23.51M parameters, although its ten-crop pipeline still limits throughput to 35.28 images/s. ARNIQA conditioning is therefore most appropriate when accuracy is worth substantially higher inference cost, not for the high-throughput operating point.
+
+\section{Comparison Across Experiment Groups}
+
+Table~\ref{tab:cross-group} collects the most informative operating points from all three experiment groups. The external aggregates must be interpreted with care: text-conditioning models trained on the three-dataset mixture use a nine-dataset macro average that additionally includes GFIQA-20k and PIPAL, whereas the KADID-10k label, classifier, and ARNIQA experiments use the seven common evaluation datasets. The table is therefore suitable for identifying broad accuracy--efficiency patterns, while strict claims still rely on the matched controls inside each experiment section.
+
+\begin{table}[htbp]
+\centering
+\small
+\setlength{\tabcolsep}{3pt}
+\resizebox{\textwidth}{!}{%
+\begin{tabular}{lccccccc}
+\hline
+Configuration & External sets & External SRCC & Parameters & GFLOPs & FPS & p50 ms & Peak MB \\
+\hline
+Initial KADID-only CLIP-B baseline & 7 & 0.4783 & 86.00M & 33.6965 & 335.65 & 3.4 & 347.9 \\
+Pooled CLIP-B text interaction & 9 & 0.6191 & 86.33M & 33.6966 & 333.92 & 3.3 & 349.3 \\
+Five-view CLIP-B text interaction & 9 & 0.6539 & 86.53M & 175.6352 & 99.37 & 10.1 & 408.4 \\
+Five-view calibrated CLIP-B text & 9 & \textbf{0.6612} & 86.53M & 175.6352 & 79.93 & 12.5 & 408.4 \\
+Dataset-label residual gate & 7 & 0.6314 & 86.20M & 35.1270 & 529.77 & 1.761 & 663.2 \\
+Dataset-label rank-4 hypernetwork & 7 & 0.6380 & 86.00M & 35.1270 & 353.22 & 3.244 & 660.8 \\
+Classifier layer-3 features & 7 & 0.5200 & 97.26M & 46.1179 & 74.44 & 4.6 & 407.5 \\
+CLIP-B $+$ ARNIQA features & 7 & 0.5977 & 109.65M & 116.8700 & 26.86 & 37.053 & 1445.8 \\
+\hline
+\end{tabular}
+}
+\caption{Representative results across experiment groups. Bold marks the highest reported external SRCC among the selected CLIP-Base configurations, not a strict common-suite ranking.}
+\label{tab:cross-group}
+\end{table}
+
+Text and oracle dataset labels provide the best accuracy--efficiency balance because their condition vectors are computed once or retrieved by index and add little cost to the frozen CLIP-Base encoder. The pooled text model is almost as fast and memory-efficient as its image-only counterpart. Dataset-label residual gating is the fastest high-correlation operating point in the recorded measurements, and the rank-4 hypernetwork offers a small additional accuracy gain while retaining baseline-scale parameters and GFLOPs. Their limitation is that the correct distortion group must already be available.
+
+The classifier experiments test one way to remove that requirement, but predicted hard or soft labels do not preserve the oracle benefit. Intermediate classifier features recover more quality information, especially on KADID-10k, yet their external macro SRCC remains below that of the dataset-mixture label and text models. ARNIQA features are a stronger automatically extracted condition and produce a large in-domain gain, but the second backbone and ten-crop evaluation make them the most memory-intensive CLIP-Base approach. Thus increasingly rich automatic conditions improve the available quality signal, but they also move the model away from the lightweight-conditioning objective.
+
+The most successful architectural change is to preserve global representations while adding complementary localized evidence. Direct patch-score weighting discards too much global context, whereas the five-view text model encodes a full pooled representation for one global crop and four local crops. This explains why five-view conditioning improves all three tested backbone families and why CLIP-Base can match the accuracy range of much larger encoders. Among the compared models, five-view SigLIP-Large gives the highest external SRCC of 0.6699, but calibrated five-view CLIP-Base reaches 0.6612 with roughly one quarter of the parameters, one third of the peak memory, and more than three times the throughput.
+
+\section{Conclusion}
+
+The experiments show that distortion conditioning can improve no-reference IQA, but its effectiveness depends on both the information content of the condition and the way the visual representation is preserved. Natural-language interaction consistently improves a matched pooled CLIP-Base baseline, survives prompt paraphrasing, and degrades under wrong or shuffled prompts, demonstrating genuine use of condition semantics. Oracle dataset labels also help, with residual gating and a rank-4 hypernetwork providing strong and inexpensive fusion mechanisms. By contrast, predicted class labels are too coarse to improve quality ranking reliably, while continuous classifier and ARNIQA features contain more useful information but generalize unevenly or require substantially more computation.
+
+The selected training mixture combines controlled, authentic, and generative distortions without the transfer loss observed after adding PIPAL ranking or the screened GFIQA expansion. Dataset-specific MOS calibration is well motivated by incompatible subjective scales and slightly improves some settings, but neither the approximate nor faithful MDTVSFA-style objective replaces ordinary global interaction as the best pooled approach. Head-capacity controls likewise show that the gain is not explained by parameter count alone. The largest improvement comes from combining text interaction with global-plus-local five-view features, which retains image context while exposing localized artefacts.
+
+For a high-throughput system with known distortion metadata, the dataset-label residual gate is the most efficient strong option. When a natural-language condition is preferred, pooled CLIP-Base interaction adds almost no inference cost and gives a clear transfer gain. When maximum accuracy is more important, the five-view CLIP-Base text model offers the best overall compromise: it approaches the strongest SigLIP-Large result and exceeds the tested CLIP-Large alternatives while remaining far smaller, faster, and less memory-intensive. The remaining practical challenge is to obtain a reliable condition for an arbitrary image without losing the benefit through classification errors or adding the cost of a second heavy visual encoder.
 
 \end{document}
