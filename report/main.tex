@@ -283,4 +283,89 @@ Patch attention & 0.8245 & 0.8228 & 0.6107 & 0.6276 & 198,112 \\
 
 Input FiLM gave the best in-domain validation result, whereas the approximately capacity-matched rank-4 hypernetwork gave the best external macro result. This reversal shows why architecture selection based only on the training-domain validation split can be misleading. The selected FiLM checkpoint also depended strongly on the condition: its validation macro SRCC was 0.8417 with correct labels, 0.8081 with zeroed labels, 0.7942 with deliberately wrong labels, and 0.7821 with shuffled labels. Thus the head learned to use the supplied group, although the oracle-label benefit was not equally transferable across fusion rules and datasets.
 
+\section{Classifier Label and Feature Conditioning}
+
+\subsection{Distortion Classifier}
+
+Oracle group labels are unavailable for arbitrary test images, so we trained an ImageNet-pretrained ResNet-18 to recognize the eight distortion groups. Its final classification layer was replaced by an eight-class output layer, and the network was trained on KADID-10k for 20 epochs with class-weighted cross entropy, AdamW, a learning rate of $10^{-4}$, weight decay $10^{-4}$, and batches of 64. The best validation accuracy was 88.6\%. We then supplied either the classifier's hard argmax label or its soft class-probability vector to a CLIP-Base quality head. In the frozen setting the classifier weights were fixed; in the joint setting the classifier and IQA head were optimized together with loss $L=L_{\mathrm{IQA}}+0.25L_{\mathrm{cls}}$.
+
+\subsection{Predicted-Label Results}
+
+Table~\ref{tab:classifier-labels} compares predicted labels with both an oracle-label upper bound and a zero-condition control using the same one-hidden-layer concatenation head. Ground-truth labels gave only a small improvement over the zero-condition control. Replacing them with predictions from the frozen classifier reduced both KADID-10k and external correlations, and soft probabilities did not correct the loss. Joint fine-tuning also failed to help. Classification accuracy therefore did not translate directly into a useful low-dimensional quality condition: mistakes in the discrete group and the removal of within-group severity information outweighed the modest oracle-label benefit.
+
+\begin{table}[htbp]
+\centering
+\small
+\setlength{\tabcolsep}{5pt}
+\resizebox{\textwidth}{!}{%
+\begin{tabular}{lcccc}
+\hline
+Condition source & KADID SRCC & KADID PLCC & External SRCC & External PLCC \\
+\hline
+Zero condition & 0.7828 & 0.7768 & 0.4981 & 0.5059 \\
+Ground-truth hard label & \textbf{0.7867} & \textbf{0.7814} & \textbf{0.5025} & \textbf{0.5101} \\
+Frozen classifier, hard label & 0.7718 & 0.7586 & 0.4753 & 0.4743 \\
+Frozen classifier, soft probabilities & 0.7679 & 0.7536 & 0.4775 & 0.4760 \\
+Joint classifier, soft probabilities & 0.7690 & 0.7477 & 0.4731 & 0.4618 \\
+\hline
+\end{tabular}
+}
+\caption{CLIP-Base IQA conditioned by ResNet-18 classifier outputs. External columns are seven-dataset macro averages. All IQA results are from seed 0 at the selected validation checkpoint.}
+\label{tab:classifier-labels}
+\end{table}
+
+\subsection{Classifier Feature Conditioning}
+
+The classifier's intermediate representation retains more information than an eight-way output. We therefore extracted globally averaged activations from ResNet-18 layer 3 (256 dimensions) and layer 4 (512 dimensions), kept the classifier frozen, and concatenated them with the pooled CLIP-Base feature. We tested both a learned projection to 32 dimensions and direct concatenation after layer normalization. The regression head had two 256-unit hidden layers. A widened image-only head with approximately the same total parameter count was trained as a capacity control.
+
+\begin{table}[htbp]
+\centering
+\small
+\setlength{\tabcolsep}{4pt}
+\resizebox{\textwidth}{!}{%
+\begin{tabular}{lccccc}
+\hline
+Condition & KADID SRCC & KADID PLCC & External SRCC & External PLCC & Total parameters \\
+\hline
+Capacity-matched image-only control & 0.7632 & 0.7703 & 0.4873 & 0.5061 & 97.27M \\
+Layer 3, projected to 32 dimensions & 0.8062 & 0.7992 & \textbf{0.5200} & 0.5184 & 97.26M \\
+Layer 4, projected to 32 dimensions & 0.8428 & 0.8533 & 0.4907 & 0.5155 & 97.27M \\
+Layer 3, layer-normalized & 0.8314 & 0.8230 & 0.5081 & 0.5212 & 97.31M \\
+Layer 4, layer-normalized & \textbf{0.8906} & \textbf{0.8968} & 0.5068 & \textbf{0.5315} & 97.38M \\
+\hline
+\end{tabular}
+}
+\caption{Conditioning on frozen classifier features. The capacity control includes a widened image-only head so that total parameter counts are comparable; all rows are single-seed selected-checkpoint results.}
+\label{tab:classifier-features}
+\end{table}
+
+Intermediate features were substantially more useful than predicted class labels. Directly normalized layer-4 features produced the strongest KADID-10k result in this experiment group, improving SRCC by 0.1274 over the capacity control, while projected layer-3 features gave the best external SRCC. The transfer gains were much smaller than the in-domain gain and varied sharply by dataset: for example, the layer-4 model obtained SRCC 0.8427 on CSIQ but only 0.0489 on UHD-IQA. We therefore interpret classifier features as a strong in-domain distortion representation, not as evidence that the eight-class classifier generalizes uniformly to unseen image domains.
+
+\subsection{ARNIQA Feature Conditioning as a Side Result}
+
+As a side experiment, we replaced the classifier representation with features from a frozen ARNIQA encoder. For every image, ARNIQA aggregates five spatial crops at full scale and five at half scale into a 4096-dimensional feature. This vector is layer-normalized, projected through a 32-dimensional GELU bottleneck, and concatenated with the frozen pooled CLIP feature before quality regression. This is no longer a minimal label-conditioning method: it adds a second IQA-oriented visual encoder and ten-crop processing, so its accuracy and computational cost must be interpreted separately from the lightweight group conditions.
+
+\begin{table}[htbp]
+\centering
+\small
+\setlength{\tabcolsep}{4pt}
+\resizebox{\textwidth}{!}{%
+\begin{tabular}{lccccc}
+\hline
+Model & KADID SRCC & KADID PLCC & External SRCC & External PLCC & Total parameters \\
+\hline
+CLIP-B image-only baseline & 0.7548 & 0.7338 & 0.4861 & 0.4880 & 86.00M \\
+CLIP-B $+$ ARNIQA condition & 0.8890 & 0.8787 & \textbf{0.5977} & \textbf{0.6117} & 109.65M \\
+CLIP-L image-only baseline & 0.8678 & 0.8657 & 0.5111 & 0.5253 & 303.77M \\
+CLIP-L $+$ ARNIQA condition & 0.9191 & 0.9167 & 0.5645 & 0.5817 & 327.43M \\
+Standalone ARNIQA regressor & \textbf{0.9270} & \textbf{0.9305} & 0.5859 & 0.5923 & 23.51M \\
+\hline
+\end{tabular}
+}
+\caption{ARNIQA feature-conditioning side result. CLIP comparisons use the best KADID-10k validation checkpoint; external values are seven-dataset macro averages. The standalone official ARNIQA regressor is included as a reference rather than a capacity-matched baseline.}
+\label{tab:arniqa-features}
+\end{table}
+
+ARNIQA features improved both CLIP backbones: KADID-10k SRCC increased by 0.1342 for CLIP-Base and 0.0513 for CLIP-Large, while external macro SRCC increased by 0.1116 and 0.0534, respectively. The inference interventions show that the auxiliary representation was actively used. For CLIP-Base, shuffling ARNIQA features among validation images reduced SRCC from 0.8890 to 0.6019 and zeroing them reduced it to 0.7524; for CLIP-Large, the corresponding values were 0.9191, 0.6943, and 0.8503. The standalone ARNIQA regressor remained strongest on KADID-10k, but CLIP-Base with ARNIQA conditioning gave the highest external macro correlation in this comparison. These results suggest that continuous distortion-aware features are much more informative than a hard group identity, although much of the gain comes with the cost and prior knowledge of an additional IQA encoder.
+
 \end{document}
