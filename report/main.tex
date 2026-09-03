@@ -135,4 +135,89 @@ Within each training dataset, 20\% of the data is held out for validation. Synth
 
 We report SRCC and PLCC separately for every dataset. For multi-dataset experiments, macro SRCC and macro PLCC are computed by averaging the per-dataset correlations rather than pooling samples whose subjective scales and contents are not directly comparable; the worst per-dataset SRCC is also recorded. PIPAL is additionally evaluated using mean within-reference SRCC because its Elo scores rank restorations of the same source image and do not define an absolute ordering across different references. Conditioned models are compared with an independently trained image-only baseline under the same backbone, data split, and optimization settings. The intervention tests with wrong, shuffled, zeroed, and training-permuted conditions are reported in the corresponding experiment sections.
 
+\section{Text Conditioning}
+
+\subsection{Method}
+
+In the text-conditioned experiments, every distortion group is represented by a short natural-language instruction describing the artefacts that should be assessed. For example, the blur prompt asks the model to assess lost sharpness, defocus, motion blur, and missing fine detail, while the authentic prompt asks for the overall perceptual quality of a real photograph. We encode these instructions once with the frozen text tower paired with the selected CLIP vision encoder. Both the pooled image feature and the text feature are layer-normalized and projected to 256 dimensions, so the text branch does not modify the frozen CLIP backbone.
+
+We examined three elementary fusion rules. Concatenation gives the regressor $[v,t]$, interaction fusion gives it $[v,t,v\odot t]$, and the residual model adds a text-dependent correction to an unconditional image score. Here $v$ and $t$ denote the projected image and prompt embeddings and $\odot$ denotes elementwise multiplication. The image-only baseline retains the original pooled-feature head. The interaction term proved the most reliable of these alternatives and was therefore used in the later multi-dataset and multi-view experiments.
+
+\subsection{KADID-10k Pilot}
+
+The pilot experiments used CLIP-Base, the reference-based KADID-10k split, five training epochs, and seeds 0--2. Table~\ref{tab:text-kadid-fusion} reports the mean final-epoch correlations. Simple concatenation changed SRCC only slightly, whereas interaction fusion improved mean SRCC by 0.0248 and did so for every seed. The residual formulation also improved SRCC, but its PLCC gain was much smaller than that of interaction fusion.
+
+\begin{table}[htbp]
+\centering
+\small
+\setlength{\tabcolsep}{6pt}
+\resizebox{\textwidth}{!}{%
+\begin{tabular}{lcccc}
+\hline
+Method & Conditioned features & SRCC & PLCC & $\Delta$ SRCC \\
+\hline
+Image-only baseline & $v$ & 0.7599 & 0.7300 & -- \\
+Text concatenation & $[v,t]$ & 0.7648 & 0.7574 & +0.0049 \\
+Residual text correction & image score $+$ text correction & 0.7753 & 0.7427 & +0.0154 \\
+Text interaction & $[v,t,v\odot t]$ & \textbf{0.7847} & \textbf{0.7892} & \textbf{+0.0248} \\
+\hline
+\end{tabular}
+}
+\caption{CLIP-Base results on the KADID-10k validation split, averaged over three seeds at the final epoch.}
+\label{tab:text-kadid-fusion}
+\end{table}
+
+To test whether the interaction model used the meaning of the condition, we replaced the canonical prompt at inference time without changing the images or frozen image features. A held-out paraphrase preserved most of the result, while a generic quality prompt, a prompt for the wrong distortion family, and shuffled prompts all reduced SRCC substantially. The small gap between canonical and held-out wording indicates that the model was not merely memorizing one exact prompt string; the much larger drops under wrong and shuffled conditions show that the prompt--image correspondence mattered.
+
+\begin{table}[htbp]
+\centering
+\small
+\setlength{\tabcolsep}{7pt}
+\resizebox{\textwidth}{!}{%
+\begin{tabular}{lccccc}
+\hline
+Condition at evaluation & Canonical & Held-out paraphrase & Generic & Wrong group & Shuffled \\
+\hline
+Mean SRCC & \textbf{0.7861} & 0.7752 & 0.7265 & 0.7269 & 0.7190 \\
+\hline
+\end{tabular}
+}
+\caption{Semantic intervention on the CLIP-Base interaction model trained on KADID-10k; values are means over seeds 0--2.}
+\label{tab:text-intervention}
+\end{table}
+
+The same interaction head was also evaluated with CLIP-Large for seed 0. At the final epoch, SRCC increased from 0.8469 for the image-only baseline to 0.8896 for the text-conditioned model. Replacing the correct condition by a shuffled condition reduced SRCC to 0.8045, confirming that the stronger backbone did not eliminate the model's dependence on the supplied distortion description.
+
+\subsection{Multi-Dataset and Multi-View Experiments}
+
+The principal text-conditioning experiment used the clean training mixture of KADID-10k, SPAQ, and AIGCIQA2023. It contains 18,945 training images and 4,705 validation images, sampled with equal expected weight per dataset. GFIQA-20k, PIPAL, TID2013, CSIQ, CID2013, KonIQ-10k, CLIVE, AGIQA-3K, and UHD-IQA form the nine-dataset external macro average for this experiment. We selected a checkpoint using validation macro SRCC and report means across seeds 0--2 for the central pooled and five-view text models.
+
+The five-view model was introduced because a single center crop can remove local distortions or rescale them until they are difficult to recognize. It encodes one aspect-preserving global crop and four local tiles with the frozen CLIP encoder. The text interaction features $[v_i,t,v_i\odot t]$ determine a learned softmax weight for each view; the weighted visual representation is then fused with the prompt by the same interaction rule. The image-only multi-view control uses the same five views and learned weighting but omits the text branch, while a widened control approximately matches the conditioned head's parameter count.
+
+\begin{table}[htbp]
+\centering
+\small
+\setlength{\tabcolsep}{4pt}
+\resizebox{\textwidth}{!}{%
+\begin{tabular}{llccccc}
+\hline
+Backbone and head & Seeds & Val. SRCC & Val. PLCC & External SRCC & External PLCC & Total parameters \\
+\hline
+CLIP-B pooled image-only & 0--2 & 0.8173 & 0.8143 & 0.5928 & 0.6158 & 86.00M \\
+CLIP-B pooled text interaction & 0--2 & 0.8370 & 0.8455 & 0.6191 & 0.6570 & 86.33M \\
+CLIP-B five-view image-only & 0 & 0.8553 & 0.8680 & 0.6310 & 0.6578 & 86.13M \\
+CLIP-B five-view image-only, capacity matched & 0 & 0.8546 & 0.8619 & 0.6236 & 0.6490 & 86.53M \\
+CLIP-B five-view text interaction & 0--2 & \textbf{0.8685} & \textbf{0.8759} & \textbf{0.6539} & \textbf{0.6855} & 86.53M \\
+CLIP-L five-view text interaction & 0 & 0.8859 & 0.8963 & 0.6475 & 0.6693 & 304.37M \\
+\hline
+\end{tabular}
+}
+\caption{Clean-mixture text-conditioning results. Validation values are three-dataset macro correlations and external values are nine-dataset macro correlations. Multi-seed values are arithmetic means of the selected checkpoints; single-seed controls are marked explicitly.}
+\label{tab:text-main-results}
+\end{table}
+
+With pooled CLIP-Base features, text conditioning raised validation macro SRCC by 0.0197 and external macro SRCC by 0.0263 over the three-seed image-only baseline. The improvement was not uniform: it was strongest on UHD-IQA, KonIQ-10k, CLIVE, and CSIQ, while PIPAL and TID2013 declined. This mixed per-dataset behavior is important because it shows that the aggregate improvement is not evidence of universal zero-shot transfer.
+
+The five-view text model produced the best replicated CLIP-Base result: validation SRCC/PLCC of 0.8685/0.8759 and external SRCC/PLCC of 0.6539/0.6855. For the directly paired seed-0 runs, it exceeded the image-only five-view control by 0.0168 validation SRCC and 0.0270 external SRCC. It also exceeded the capacity-matched image-only control, so the gain cannot be explained solely by the larger scoring head. A calibrated five-view seed-0 variant reached the highest single-run CLIP-Base external SRCC of 0.6612, but we treat the uncalibrated three-seed mean as the more reliable headline result. Scaling the five-view text model to CLIP-Large improved validation correlation but did not improve the external macro average, suggesting that crop coverage and conditioning were more consequential for transfer than backbone size alone.
+
 \end{document}
