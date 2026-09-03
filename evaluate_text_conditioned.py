@@ -28,7 +28,8 @@ from train_text_conditioned import PromptBank, evaluate
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--config", default=None, help="optional evaluation YAML")
-    parser.add_argument("--source-run-id", required=True, help="MLflow run containing checkpoint/config artifacts")
+    parser.add_argument("--source-run-id", default=None, help="MLflow run containing checkpoint/config artifacts")
+    parser.add_argument("--checkpoint", default=None, help="local quality-head checkpoint (use with --config)")
     parser.add_argument("--data", nargs="+", required=True, help="prepared held-out labels.csv files")
     parser.add_argument("--backbone", choices=sorted(BACKBONES), default=None)
     parser.add_argument("--weights", default=None)
@@ -85,12 +86,23 @@ def source_defaults(run_id: str, tracking_uri: str) -> tuple[dict, Path, str]:
 def parse_args() -> tuple[argparse.Namespace, Path, str]:
     bootstrap = argparse.ArgumentParser(add_help=False)
     bootstrap.add_argument("--config")
-    bootstrap.add_argument("--source-run-id", required=True)
+    bootstrap.add_argument("--source-run-id")
+    bootstrap.add_argument("--checkpoint")
     bootstrap.add_argument("--mlflow-tracking-uri", default="sqlite:///mlflow.db")
     bootstrap_args, _ = bootstrap.parse_known_args()
-    defaults, checkpoint_path, source_name = source_defaults(
-        bootstrap_args.source_run_id, bootstrap_args.mlflow_tracking_uri
-    )
+    if bootstrap_args.source_run_id and bootstrap_args.checkpoint:
+        bootstrap.error("use only one of --source-run-id and --checkpoint")
+    if not bootstrap_args.source_run_id and not bootstrap_args.checkpoint:
+        bootstrap.error("one of --source-run-id or --checkpoint is required")
+
+    if bootstrap_args.source_run_id:
+        defaults, checkpoint_path, source_name = source_defaults(
+            bootstrap_args.source_run_id, bootstrap_args.mlflow_tracking_uri
+        )
+    else:
+        defaults = {}
+        checkpoint_path = Path(bootstrap_args.checkpoint).expanduser()
+        source_name = checkpoint_path.stem
     parser = build_parser()
     if bootstrap_args.config:
         with Path(bootstrap_args.config).open(encoding="utf-8") as stream:
@@ -111,6 +123,16 @@ def parse_args() -> tuple[argparse.Namespace, Path, str]:
     valid = {action.dest for action in parser._actions}
     parser.set_defaults(**{key: value for key, value in defaults.items() if key in valid})
     args = parser.parse_args()
+    if args.source_run_id and args.checkpoint:
+        parser.error("use only one of --source-run-id or --checkpoint")
+    if not args.source_run_id and not args.checkpoint:
+        parser.error("one of --source-run-id or --checkpoint is required")
+    if args.checkpoint:
+        checkpoint_path = Path(args.checkpoint).expanduser()
+        if not checkpoint_path.is_file():
+            parser.error(f"local checkpoint does not exist: {checkpoint_path}")
+        if not args.config:
+            parser.error("--config is required when evaluating a local checkpoint")
     # Source manifests created before this option existed use the historical
     # stretch transform, so they remain evaluable and reproducible.
     args.preprocessing = args.preprocessing or "stretch"
@@ -165,7 +187,7 @@ def safe_args(args) -> dict:
 
 def main() -> None:
     args, checkpoint_path, source_name = parse_args()
-    required = ("backbone", "weights", "method", "hidden_dim")
+    required = ("backbone", "method", "hidden_dim")
     missing = [name for name in required if getattr(args, name) is None]
     if missing:
         raise ValueError(f"source run manifest lacks required settings: {', '.join(missing)}")
@@ -178,7 +200,8 @@ def main() -> None:
     evaluation_run_name = args.mlflow_run_name or f"external-{source_name}"
     run = mlflow.start_run(run_name=evaluation_run_name)
     mlflow.log_params({key: str(value) for key, value in safe_args(args).items()})
-    mlflow.set_tag("source_run_id", args.source_run_id)
+    if args.source_run_id:
+        mlflow.set_tag("source_run_id", args.source_run_id)
     device = torch.device(args.device if args.device != "auto" else "cuda" if torch.cuda.is_available() else "cpu")
     backbone, image_size, vision_dim = load_backbone(args.backbone, args.weights, device)
     prompts = None

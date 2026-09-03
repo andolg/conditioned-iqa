@@ -9,6 +9,80 @@ in — is at
 [dreminm.github.io/iqa-summer-school/project-1.html](https://dreminm.github.io/iqa-summer-school/project-1.html).
 This repository is where you start from.
 
+## Submission reproduction
+
+| model | test SRCC | test PLCC |
+| --- | ---: | ---: |
+| Image-only baseline | 0.4783 | 0.4572 |
+| Text-conditioned model | 0.6612 | 0.6852 |
+| Label-conditioned model | 0.6380 | 0.6534 |
+| Model conditioned with a trained label classifier | 0.5200 | 0.5184 |
+
+All models use CLIP-B/16. The baseline average covers TID2013, CSIQ,
+CID2013, KonIQ-10k, CLIVE, AGIQA-3K, and UHD-IQA; conditioned-model averages
+also include GFIQA-20K and PIPAL.
+
+### Setup
+
+```bash
+uv venv --python 3.12 && source .venv/bin/activate
+uv pip install -e .
+export DATA_ROOT="${DATA_ROOT:-$HOME/conditioned-iqa/data}"
+for d in kadid10k spaq aigciqa2023 tid2013 csiq cid2013 koniq10k clive agiqa3k gfiqa20k pipal uhdiqa; do
+  uv run python download_data.py "$d" --data-root "$DATA_ROOT"
+done
+mkdir -p "$DATA_ROOT/multi_train_clean"
+uv run python prepare_data.py "$DATA_ROOT/kadid10k" "$DATA_ROOT/spaq" "$DATA_ROOT/aigciqa2023" --out "$DATA_ROOT/multi_train_clean/labels.csv"
+for d in tid2013 csiq cid2013 koniq10k clive agiqa3k gfiqa20k pipal uhdiqa; do
+  uv run python prepare_data.py "$DATA_ROOT/$d"
+done
+```
+
+### Evaluate the released weights (no training)
+
+Download the three release assets into `weights/` (the filenames are listed
+below), then prepare the datasets as in Setup. These commands only load the
+checkpoints and report per-dataset and macro SRCC/PLCC.
+
+```bash
+uv run python evaluate_text_conditioned.py --checkpoint weights/clipb-five-view-calibrated-interaction-best.pt --config configs/text_conditioning/65_clean_multi_multiview_mdtvsfa_interaction.yaml --data "$DATA_ROOT"/{tid2013,csiq,cid2013,koniq10k,clive,agiqa3k,gfiqa20k,pipal,uhdiqa}/labels.csv --weights "${CLIP_BASE_WEIGHTS:-}" --text-weights "${CLIP_BASE_WEIGHTS:-}" --device cuda:0
+```
+
+The label and classifier commands are available after merging the
+label-conditioning tree (they use the checkpoint's saved architecture and do
+not retrain):
+
+```bash
+uv run python evaluate.py --checkpoint weights/label_low_rank_hypernetwork_multitrain_clean_best.pth --data "$DATA_ROOT"/{tid2013,csiq,cid2013,koniq10k,clive,agiqa3k,gfiqa20k,pipal,uhdiqa}/labels.csv --device cuda:0
+uv run python evaluate_classifier_checkpoint.py --checkpoint weights/clipb-classifier-layer3-feature-deep-concat-best.pt --data "$DATA_ROOT"/{tid2013,csiq,cid2013,koniq10k,clive,agiqa3k,gfiqa20k,pipal,uhdiqa}/labels.csv --device cuda:0
+```
+
+Best release assets:
+`clipb-five-view-calibrated-interaction-best.pt`,
+`label_low_rank_hypernetwork_multitrain_clean_best.pth`,
+`clipb-classifier-layer3-feature-deep-concat-best.pt`.
+
+All three evaluators load the released checkpoint directly; evaluation does
+not retrain the models.
+
+### Train from scratch
+
+Use the prepared multi-dataset table from Setup:
+
+```bash
+# Text-conditioned model
+uv run python train_text_conditioned.py --config configs/text_conditioning/65_clean_multi_multiview_mdtvsfa_interaction.yaml --data "$DATA_ROOT/multi_train_clean/labels.csv" --device cuda:0 --weights "${CLIP_BASE_WEIGHTS:-}" --text-weights "${CLIP_BASE_WEIGHTS:-}" --out weights/text-conditioned-best.pt
+
+# Label-conditioned model
+uv run python -m label_and_embed_conditioning.train --data "$DATA_ROOT/multi_train_clean/labels.csv" --backbone clip-base --epochs 5 --batch-size 32 --lr 0.001 --hidden-dim 256 --conditioning label --label-fusion low_rank_hypernetwork --label-dim 32 --low-rank-dim 4 --condition-dropout 0.1 --split reference --sampler random --device cuda:0 --seed 0 --save-dir weights --name label-conditioned
+
+# Model conditioned with a trained label classifier
+uv run python -m models.label_cond.train --config configs/label_cond/label_cond.yaml configs/label_cond/16_frozen_layer3_emb_deep.yaml
+```
+
+The label-conditioning commands require the label-conditioning tree to be
+present in the checkout.
+
 Four scripts and a note to get you to a number today:
 
 ```
@@ -32,111 +106,16 @@ python prepare_data.py ~/iqa-data/kadid10k
 python train.py --data ~/iqa-data/kadid10k/labels.csv --epochs 5
 ```
 
-To run the learned-label conditioning experiment on the same frozen backbone:
+Reusable experiment arguments live in `configs/`; command-line options can
+override YAML defaults:
 
-```bash
-python train.py --data ~/iqa-data/kadid10k/labels.csv --epochs 5 \
-  --conditioning label --label-dim 32 \
-  --save-dir ./weights --name label_conditioned_clip_base
+```
+uv run python train.py --config configs/kadid_smoke.yaml
+uv run python train.py --config configs/kadid_smoke.yaml --limit 256 --seed 1
 ```
 
-The parameter-matched patch-attention and low-rank hypernetwork experiments
-each have matching CLIP-Base and CLIP-Large launchers:
-
-```bash
-bash scripts/train/train_label_patch_attention_base.sh
-bash scripts/train/train_label_patch_attention_large.sh
-bash scripts/train/train_label_low_rank_hypernetwork_base.sh
-bash scripts/train/train_label_low_rank_hypernetwork_large.sh
-```
-
-Both use the parameter budget of a 256-wide baseline head. Patch attention
-spends part of that budget on a label-guided query over frozen spatial tokens;
-the low-rank hypernetwork spends it on a rank-4 label-generated update. Override
-the latter with `LOW_RANK_DIM=8`, and override either run's five-epoch default
-with `EPOCHS=N`.
-
-`run_label_conditioned.sh` mirrors `run_baseline_large.sh` exactly (CLIP-Large,
-data, device, and local weights) and changes only the head conditioning, so
-those two runs are the direct comparison for the current setup. Use
-`run_baseline_base.sh` for the CLIP-Base baseline. The required permuted-training
-control can use that same script while overriding its output:
-
-```bash
-bash run_label_conditioned.sh --permute-training-labels \
-  --save-dir ~/conditioned-iqa/28d_evs/conditioned-iqa/weights \
-  --name label_permuted_clip_large
-```
-
-This adds only a small group embedding and one narrow slice to the existing
-MLP input; it does not enlarge or fine-tune CLIP. Validation reports the
-oracle (correct) group normally, then reports shuffled, deliberately wrong,
-and zeroed conditions from the same frozen image features. Those checks show
-whether a gain came from using the label rather than merely adding parameters.
-`--condition-dropout 0.1` (the default) zeroes a small fraction of training
-conditions so the zeroed-label result is a learned fallback.
-
-Each validation pass also prints inference latency p50/p95 in milliseconds
-per image, peak allocated CUDA memory in MB, and image throughput. Timing
-covers device transfer, the frozen vision backbone, and the normal prediction
-head at the configured batch size; metric computation and condition-ablation
-forwards are excluded. Peak memory is reported as `N/A` outside CUDA.
-After training, the macro validation SRCC/PLCC from the best epoch is printed.
-The best epoch is selected by macro validation SRCC. Training always writes
-`NAME_best.pth` and `NAME_last.pth` below `--save-dir`.
-
-For per-image distortion-manifold conditioning, run:
-
-    bash scripts/train/train_arniqa_conditioned_base.sh
-    bash scripts/train/train_arniqa_conditioned_large.sh
-    bash scripts/test/evaluate_arniqa_base.sh
-    bash scripts/test/evaluate_arniqa_large.sh
-
-For the comparison row using pretrained ARNIQA itself as the quality metric:
-
-    bash scripts/test/evaluate_arniqa.sh
-
-This defaults to ARNIQA's official KADID-10k regressor and evaluates the same
-prepared datasets without CLIP or a trained conditioned head. Override the
-official regressor with `REGRESSOR_DATASET`, or provide local files through
-`ARNIQA_WEIGHTS` and `ARNIQA_REGRESSOR_WEIGHTS`.
-
-This path uses only ARNIQA's frozen self-supervised encoder, not any of its
-dataset-specific quality regressors. It averages the official center and
-corner crops at full and half scale, projects the resulting 4096-dimensional
-condition through a learned 32-dimensional bottleneck, and concatenates that
-with the normalized frozen CLIP feature. Set
-`ARNIQA_WEIGHTS=/path/to/ARNIQA.pth` to use a local checkpoint; otherwise
-the official encoder checkpoint is downloaded to PyTorch's cache.
-
-The paired-training control keeps images and targets fixed while globally
-permuting their ARNIQA condition donors:
-
-    bash run_arniqa_conditioned.sh --permute-training-conditions --name arniqa_permuted_clip_large
-
-ARNIQA validation reports correct, whole-dataset shuffled, and zeroed
-conditions. Normal-path latency and memory include both frozen encoders and
-all ten ARNIQA crops.
-
-Evaluate one trained checkpoint on every prepared dataset under
-`~/conditioned-iqa/data` without retraining or reloading the backbone between
-datasets:
-
-```bash
-bash scripts/evaluate_all.sh
-```
-
-The default is `./weights/label_conditioned_clip_large_best.pth` on `cuda:7`.
-Override those settings with environment variables and pass remaining
-evaluation options after the script name:
-
-```bash
-CHECKPOINT=./weights/baseline_clip_large_best.pth DEVICE=cuda:0 \
-  bash scripts/evaluate_all.sh --batch-size 64 --workers 8
-```
-
-The evaluator prints total/trainable/head parameter counts and estimated
-GFLOPs for one normal-path image in addition to IQA and runtime metrics.
+For the held-out protocol and transfer results, see [datasets.md](datasets.md)
+and [docs/external-evaluation-results.md](docs/external-evaluation-results.md).
 
 Use `--limit 2000` while you are still wiring things up — it samples that many
 training images at random, and leaves the held-out split whole.
@@ -200,9 +179,8 @@ instead of letting the counts decide.
 `train.py` is short and meant to be edited. `--backbone clip-large`,
 `siglip2-base` or `siglip2-large`, `QualityMLP` for a different head,
 `embed()` if you want patch tokens instead of the pooled embedding. Every
-batch carries `distortion`, `level` and `group`; `--conditioning label` uses
-the coarse `group` field and keeps the individual distortion type out of the
-model.
+batch already carries `distortion`, `level` and `group`, so conditioning the
+model on them is a change to `train.py` alone.
 
 Which datasets train, which are held out and what each one is for:
 [datasets.md](datasets.md).
