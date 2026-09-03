@@ -446,7 +446,9 @@ def aggregate(config, runs):
             "Latency p50 (ms)": rounded(system["latency_p50_ms"], 1),
             "Latency p95 (ms)": rounded(system["latency_p95_ms"], 1),
             "Peak memory (MB)": rounded(system["peak_memory_mb"], 1),
-            "FPS": rounded(scores.get("kadid10k", {}).get("images_per_second"), 2),
+            "FPS": rounded(
+                scores.get(config["fps_dataset"], {}).get("images_per_second"), 2
+            ),
             "Parameters": f'{system["parameters"] / 1e6:.2f}M',
             "GFLOPs": rounded(system["gflops"]),
             "run_id": metadata["run_id"],

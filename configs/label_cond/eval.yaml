@@ -11,6 +11,7 @@ classifier_benchmark_size: [384, 512]  # H, W for latency/GFLOPs only
 latency_warmup: 10
 latency_repeats: 50
 train_datasets: [KADID-10k]
+fps_dataset: tid2013
 
 backbone_names:
   clip-base: CLIP-B/16
