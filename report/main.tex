@@ -1,6 +1,9 @@
 \documentclass{article}
 \usepackage{graphicx} % Required for inserting images
 
+\usepackage{makecell}
+
+
 \title{Distortion-Conditioned IQA}
 \author{Sergey Muravlev, Danila Evsyukov, Andrey Dolgolenko}
 \date{September 2026}
@@ -427,7 +430,7 @@ Rank-4 hypernetwork & \textbf{0.8264} & 0.8151 & 0.8022 & 0.7893 \\
 \label{tab:label-interventions}
 \end{table}
 
-For FiLM, replacing correct labels with zero, wrong, or shuffled labels reduces SRCC by 0.0336, 0.0475, and 0.0596, respectively. The corresponding hypernetwork reductions are 0.0113, 0.0242, and 0.0371. The ordered deterioration from correct to zero, wrong, and shuffled conditions confirms that both heads use group identity rather than merely benefiting from added capacity. The hypernetwork is less sensitive to label corruption than FiLM yet transfers better to the external datasets. A plausible explanation is that its rank constraint limits condition-specific changes to the scoring weights: it can specialize the quality mapping for a distortion group without freely rescaling and shifting the entire visual representation, which may preserve more of CLIP's transferable structure. This interpretation is consistent with the results but is not a causal guarantee.
+For FiLM, replacing correct labels with zero, wrong, or shuffled labels reduces SRCC by 0.0336, 0.0475, and 0.0596, respectively. The corresponding hypernetwork reductions are 0.0113, 0.0242, and 0.0371. The ordered deterioration from correct to zero, wrong, and shuffled conditions confirms that both heads use group identity rather than merely benefiting from added capacity. The hypernetwork is less sensitive to label corruption than FiLM yet transfers better to the external datasets.
 
 The dataset-mixture residual gate and rank-4 hypernetwork define the high-accuracy part of the Pareto front. The residual gate is faster, reaching external SRCC 0.6314 at 529.77 images/s and 1.761 ms median latency, while the hypernetwork raises SRCC to 0.6380 at 353.22 images/s and 3.244 ms. All mixture label heads remain close to 86M total parameters and about 35.13 GFLOPs; their peak memory lies between 660.8 and 679.7 MB. Hidden FiLM is the fastest mixture variant at 558.61 images/s but gives up 0.0274 SRCC relative to the hypernetwork. The result therefore offers two practical choices: the residual gate for maximum throughput and the hypernetwork for the strongest external correlation under almost the same model-size budget.
 
@@ -529,18 +532,18 @@ Table~\ref{tab:cross-group} collects the most informative operating points from 
 \small
 \setlength{\tabcolsep}{3pt}
 \resizebox{\textwidth}{!}{%
-\begin{tabular}{lccccccc}
+\begin{tabular}{lcccccc}
 \hline
-Configuration & External sets & External SRCC & Parameters & GFLOPs & FPS & p50 ms & Peak MB \\
+Configuration & External SRCC & Parameters & GFLOPs & FPS & Peak MB & \makecell{Requires \\ external labels} \\
 \hline
-Initial KADID-only CLIP-B baseline & 7 & 0.4783 & 86.00M & 33.6965 & 335.65 & 3.4 & 347.9 \\
-Pooled CLIP-B text interaction & 9 & 0.6191 & 86.33M & 33.6966 & 333.92 & 3.3 & 349.3 \\
-Five-view CLIP-B text interaction & 9 & 0.6539 & 86.53M & 175.6352 & 99.37 & 10.1 & 408.4 \\
-Five-view calibrated CLIP-B text & 9 & \textbf{0.6612} & 86.53M & 175.6352 & 79.93 & 12.5 & 408.4 \\
-Dataset-label residual gate & 7 & 0.6314 & 86.20M & 35.1270 & 529.77 & 1.761 & 663.2 \\
-Dataset-label rank-4 hypernetwork & 7 & 0.6380 & 86.00M & 35.1270 & 353.22 & 3.244 & 660.8 \\
-Classifier layer-3 features & 7 & 0.5200 & 97.26M & 46.1179 & 74.44 & 4.6 & 407.5 \\
-CLIP-B $+$ ARNIQA features & 7 & 0.5977 & 109.65M & 116.8700 & 26.86 & 37.053 & 1445.8 \\
+Initial KADID-only CLIP-B baseline & 0.4783 & 86.00M & 33.6965 & 335.65 & 347.9 & No \\
+Pooled CLIP-B text interaction & 0.6191 & 86.33M & 33.6966 & 333.92 & 349.3 & Yes \\
+Five-view CLIP-B text interaction & 0.6539 & 86.53M & 175.6352 & 99.37 & 408.4 & Yes \\
+Five-view calibrated CLIP-B text & \textbf{0.6612} & 86.53M & 175.6352 & 79.93 & 408.4 & Yes \\
+Dataset-label residual gate & 0.6314 & 86.20M & 35.1270 & 529.77 & 663.2 & Yes \\
+Dataset-label rank-4 hypernetwork & 0.6380 & 86.00M & 35.1270 & 353.22 & 660.8 & Yes \\
+Classifier layer-3 features & 0.5200 & 97.26M & 46.1179 & 74.44 & 407.5 & No \\
+CLIP-B $+$ ARNIQA features & 0.5977 & 109.65M & 116.8700 & 26.86 & 1445.8 & No \\
 \hline
 \end{tabular}
 }

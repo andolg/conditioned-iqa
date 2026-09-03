@@ -1,7 +1,19 @@
-i want to try extracting features from non-last layers of the classifier and see if it is better than using the classifier output as conditioning input.
+report/main.tex is tech report for our week long project challenge involving conditioning clip based metric on distorted images. We need to present our results in a quick 7 min presentation. Generate the slides for this presentation, keeping the nesesary and most needed part of the report while not making slides bloated with text, providing useful diagrams when needed and giving consise explanations or results.
 
-add a couple new runs extracting features from non-last layers of the classifier, based on a new parameter in config. keep the old classifier-output conditioning as default behaviour if the new parameter is not specified, for compatibility. do this with the deep head and embedding. keep concat for these. use frozen classifier for now.
+the presentation template can be found locally in untracked/ , fill it.
+your presentation should be pptx. keep your outputs local, don't edit remote files.
 
-do we have a deep head and embedding run with frozen classifier? if not, add this one too. 
+for your reference, the code and results are here:
 
-will this require changing eval script? if so, will changing it right now affect the currently eval that is currently running? if it will, postpone it, and cnhage just the train side 
+cn-server , ~/conditioned-iqa/ has three directories:
+28a_dol
+28s_mur
+28d_evs
+28s_mur contains text conditioning
+28a_dol contains classifier label and feature conditioning
+28d_evs contains more extensive label conditioning and arniqa feature conditioning
+each has some untracked artifacts that may be useful when reporting the results. these are the working directories of the contributors. however, do not distinguish them, just use "we". do not run any new experiments yourself.
+the corresponding branches have been merged to main recently, but may have minor updates after that.
+the numerical results for all meaningful experiments are compiled in https://docs.google.com/spreadsheets/d/1DZQKInig5PtctN23TXEkMzrdcc1uA9aATaxT3LTXYZY/edit?gid=2075810903#gid=2075810903
+if you need any clarifications or you can't find something yourself, ask.
+
