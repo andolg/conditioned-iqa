@@ -19,7 +19,7 @@ from arniqa import (
     embed_arniqa,
     load_arniqa_encoder,
 )
-from train import (
+from label_and_embed_conditioning.train import (
     LABEL_FUSION_HEADS,
     ARNIQAConditionedQualityMLP,
     CONDITION_GROUPS,
