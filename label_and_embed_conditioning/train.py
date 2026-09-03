@@ -902,8 +902,6 @@ def main() -> None:
         image_size=image_size,
         backbone=family,
         score_column=args.score_column,
-        arniqa=args.conditioning == "arniqa",
-        arniqa_crop_size=ARNIQA_CROP_SIZE,
     )
     train_set, val_set = split_by(dataset, args.split, fraction=0.2, seed=args.seed)
     if args.limit and args.limit < len(train_set.rows):
