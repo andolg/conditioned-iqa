@@ -10,6 +10,8 @@ per reference. This script reads whichever one it finds and writes:
     path                       absolute path to the image
     original_subjective_score  the score exactly as the release gives it
     scaled_subjective_score    the same, min-maxed into [0, 1], higher = better
+    oriented_subjective_score  a runtime-only conditioned-runner view of the
+                               raw score with DMOS datasets sign-flipped
     dataset                    which dataset the row came from
     reference                  the pristine image this is a version of, or the
                                image itself for photographs with no reference,
