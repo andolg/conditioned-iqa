@@ -1,0 +1,60 @@
+# Custom
+weights/
+
+# Environments
+.venv/
+venv/
+env/
+.python-version
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+
+# Caches
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.ipynb_checkpoints/
+
+# Downloaded data and the label tables built from it. `labels.csv` and
+# `all.csv` carry absolute paths from the machine that wrote them, so they are
+# rebuilt rather than shared — `prepare_data.py` regenerates them in seconds.
+data/
+datasets/
+archives/
+labels.csv
+all.csv
+
+# Results are deliverables, not clutter: the manifests, configs, per-split
+# prediction files and metric tables are what makes a run reproducible, so
+# `runs/`, `results/` and `manifests/` are tracked on purpose. Only the
+# weights are excluded by default — attach a checkpoint to a release rather
+# than to a commit, unless it is small enough to be worth versioning.
+*.pt
+*.pth
+*.ckpt
+!runs/**/*.pt
+*.npy
+*.log
+
+# Local experiments: scratch scripts, notebooks, throwaway configs
+scratch*
+tmp*
+notebooks/
+*_local.py
+*_scratch.py
+*.local.yaml
+*.local.json
+
+# Secrets
+.env
+.envrc
+
+# Editors and OS
+.idea/
+.vscode/
+.DS_Store
