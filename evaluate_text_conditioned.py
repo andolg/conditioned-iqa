@@ -84,6 +84,10 @@ def source_defaults(run_id: str, tracking_uri: str) -> tuple[dict, Path, str]:
 
 
 def parse_args() -> tuple[argparse.Namespace, Path, str]:
+    if "--help" in sys.argv or "-h" in sys.argv:
+        # Show the complete interface before validating the mutually exclusive
+        # checkpoint source options below.
+        build_parser().parse_args()
     bootstrap = argparse.ArgumentParser(add_help=False)
     bootstrap.add_argument("--config")
     bootstrap.add_argument("--source-run-id")
