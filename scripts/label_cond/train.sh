@@ -2,7 +2,7 @@
 set -e
 
 export MLFLOW_ALLOW_FILE_STORE=true
-export CUDA_VISIBLE_DEVICES=4
+export CUDA_VISIBLE_DEVICES=6
 
 cd "$(dirname "$0")/../.."
 
@@ -55,6 +55,9 @@ run_batch() {
 #     configs/label_cond/16_frozen_layer3_emb_deep.yaml \
 #     configs/label_cond/17_frozen_layer4_emb_deep.yaml
 
+# run_batch \
+#     configs/label_cond/18_frozen_layer3_norm_deep.yaml \
+#     configs/label_cond/19_frozen_layer4_norm_deep.yaml
+
 run_batch \
-    configs/label_cond/18_frozen_layer3_norm_deep.yaml \
-    configs/label_cond/19_frozen_layer4_norm_deep.yaml
+    configs/label_cond/20_zero_matched_layer3_params.yaml

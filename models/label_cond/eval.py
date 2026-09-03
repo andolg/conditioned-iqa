@@ -356,7 +356,11 @@ def design_description(config, source):
         f"{embedding}-d embedded labels" if embedding is not None else "labels"
     )
     hidden_dim = source["hidden_dim"]
-    head = "MLP" if isinstance(hidden_dim, int) else f"{len(hidden_dim)}-hidden-layer MLP"
+    hidden_dims = [hidden_dim] if isinstance(hidden_dim, int) else hidden_dim
+    head = (
+        f"{len(hidden_dims)}-hidden-layer MLP "
+        f"({', '.join(map(str, hidden_dims))})"
+    )
 
     def describe_fusion(labels):
         if fusion == "concat":
