@@ -220,4 +220,67 @@ With pooled CLIP-Base features, text conditioning raised validation macro SRCC b
 
 The five-view text model produced the best replicated CLIP-Base result: validation SRCC/PLCC of 0.8685/0.8759 and external SRCC/PLCC of 0.6539/0.6855. For the directly paired seed-0 runs, it exceeded the image-only five-view control by 0.0168 validation SRCC and 0.0270 external SRCC. It also exceeded the capacity-matched image-only control, so the gain cannot be explained solely by the larger scoring head. A calibrated five-view seed-0 variant reached the highest single-run CLIP-Base external SRCC of 0.6612, but we treat the uncalibrated three-seed mean as the more reliable headline result. Scaling the five-view text model to CLIP-Large improved validation correlation but did not improve the external macro average, suggesting that crop coverage and conditioning were more consequential for transfer than backbone size alone.
 
+\section{Dataset Label Conditioning}
+
+\subsection{Method}
+
+Dataset label conditioning uses the known coarse distortion group directly rather than expressing it as natural language. Each of the eight groups is mapped to a learned 32-dimensional embedding. During training, 10\% of the conditions are zeroed so that the head also learns an unconditional fallback. The CLIP visual encoder remains frozen, and only the group embedding, fusion layers, and quality head are optimized.
+
+We investigated several ways to inject the group embedding. Concatenation appends it to the normalized pooled CLIP representation; additive fusion projects it to the visual dimension and adds it to the image feature; input and hidden FiLM predict featurewise scale and shift parameters; and the residual-gate model predicts a condition-dependent correction to an unconditional score. Two exploratory variants were designed to keep the trainable parameter count close to the original head: a rank-4 hypernetwork generates a low-rank update to the first regression layer, while label-guided patch attention uses the group embedding as a query over frozen CLIP patch tokens. In all results in this section, the ground-truth dataset group is supplied at inference time, so these experiments measure the value of an oracle label rather than the performance of an automatic distortion recognizer.
+
+\subsection{Single-Dataset Results}
+
+Table~\ref{tab:label-kadid} compares the principal fusion rules on KADID-10k. The displayed checkpoint is the epoch with the best validation SRCC, which differs from the final-epoch convention used in the initial text-conditioning pilot. With CLIP-Base, the residual-gate head was the best label-conditioned variant, raising validation SRCC from 0.7548 to 0.7658 and the seven-dataset external macro SRCC from 0.4861 to 0.5230. The other fusion rules produced only small or inconsistent gains. With CLIP-Large, concatenation raised SRCC by 0.0047 while slightly reducing PLCC, again indicating that a label alone was not sufficient for a large and stable improvement.
+
+\begin{table}[htbp]
+\centering
+\small
+\setlength{\tabcolsep}{4pt}
+\resizebox{\textwidth}{!}{%
+\begin{tabular}{llcccc}
+\hline
+Backbone & Head & KADID SRCC & KADID PLCC & External SRCC & External PLCC \\
+\hline
+CLIP-B & Image-only baseline & 0.7548 & 0.7338 & 0.4861 & 0.4880 \\
+CLIP-B & Label concatenation & 0.7575 & 0.7304 & 0.4992 & 0.4898 \\
+CLIP-B & Additive & 0.7510 & 0.7212 & 0.4817 & 0.4786 \\
+CLIP-B & Input FiLM & 0.7621 & 0.7282 & 0.5081 & 0.4958 \\
+CLIP-B & Residual gate & \textbf{0.7658} & \textbf{0.7576} & \textbf{0.5230} & \textbf{0.5227} \\
+CLIP-L & Image-only baseline & 0.8678 & \textbf{0.8657} & 0.5111 & 0.5253 \\
+CLIP-L & Label concatenation & \textbf{0.8725} & 0.8617 & -- & -- \\
+\hline
+\end{tabular}
+}
+\caption{Best-validation-checkpoint results for oracle dataset labels on KADID-10k. External values are macro averages over TID2013, CSIQ, CID2013, KonIQ-10k, CLIVE, AGIQA-3K, and UHD-IQA; the CLIP-L label run was not evaluated on the complete external suite. Bold marks the better result within each backbone block.}
+\label{tab:label-kadid}
+\end{table}
+
+\subsection{Clean-Mixture Fusion Study}
+
+We next trained the CLIP-Base label-conditioned heads on the same clean mixture of KADID-10k, SPAQ, and AIGCIQA2023. Table~\ref{tab:label-joint} reports the selected checkpoint from each seed-0 run. The comparison is exploratory: the additive, FiLM, and residual-gate experiments were allowed up to 20 epochs, whereas the low-rank hypernetwork and patch-attention experiments used the five-epoch reference budget. Consequently, the table identifies promising mechanisms but should not be read as a fully controlled ranking of architectures.
+
+\begin{table}[htbp]
+\centering
+\small
+\setlength{\tabcolsep}{5pt}
+\resizebox{\textwidth}{!}{%
+\begin{tabular}{lccccc}
+\hline
+Fusion method & Val. SRCC & Val. PLCC & External SRCC & External PLCC & Trainable head parameters \\
+\hline
+Input FiLM & \textbf{0.8417} & \textbf{0.8418} & 0.6136 & 0.6351 & 248,097 \\
+Residual gate & 0.8318 & 0.8303 & 0.6314 & 0.6487 & 404,291 \\
+Rank-4 hypernetwork & 0.8264 & 0.8251 & \textbf{0.6380} & \textbf{0.6534} & 198,525 \\
+Additive & 0.8284 & 0.8240 & 0.6053 & 0.6217 & 223,521 \\
+Hidden FiLM & 0.8297 & 0.8269 & 0.6106 & 0.6184 & 215,329 \\
+Patch attention & 0.8245 & 0.8228 & 0.6107 & 0.6276 & 198,112 \\
+\hline
+\end{tabular}
+}
+\caption{Oracle label-conditioning fusion study on the clean mixture. Validation is the macro average over the three training datasets and external evaluation is the macro average over seven held-out datasets. All rows are single-seed results.}
+\label{tab:label-joint}
+\end{table}
+
+Input FiLM gave the best in-domain validation result, whereas the approximately capacity-matched rank-4 hypernetwork gave the best external macro result. This reversal shows why architecture selection based only on the training-domain validation split can be misleading. The selected FiLM checkpoint also depended strongly on the condition: its validation macro SRCC was 0.8417 with correct labels, 0.8081 with zeroed labels, 0.7942 with deliberately wrong labels, and 0.7821 with shuffled labels. Thus the head learned to use the supplied group, although the oracle-label benefit was not equally transferable across fusion rules and datasets.
+
 \end{document}
