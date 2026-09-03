@@ -18,9 +18,8 @@ This repository is where you start from.
 | Label-conditioned model | 0.6380 | 0.6534 |
 | Model conditioned with a trained label classifier | 0.5200 | 0.5184 |
 
-All models use CLIP-B/16. The baseline average covers TID2013, CSIQ,
-CID2013, KonIQ-10k, CLIVE, AGIQA-3K, and UHD-IQA; conditioned-model averages
-also include GFIQA-20K and PIPAL.
+All models use CLIP-B/16. The reported averages use the held-out datasets
+listed for each run; PIPAL and DFIQA are not included in these aggregates.
 
 ### Setup
 
