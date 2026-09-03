@@ -37,7 +37,9 @@ class IQADataset(Dataset):
     backbone:    "clip" or "siglip" — picks the normalization statistics
     score_column: "scaled_subjective_score" is min-maxed to [0, 1] with
                   higher = better; "original_subjective_score" is the number
-                  the release published
+                  the release published.  The conditioned runner also accepts
+                  "oriented_subjective_score" and flips DMOS datasets at load
+                  time while retaining their original units.
     """
 
     def __init__(

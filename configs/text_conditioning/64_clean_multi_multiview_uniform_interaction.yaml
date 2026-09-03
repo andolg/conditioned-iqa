@@ -1,0 +1,24 @@
+# Uniform-pooling ablation for the five-view native text interaction head.
+data: /home/sergey/conditioned-iqa/data/multi_train_clean/labels.csv
+backbone: clip-base
+weights: /home/sergey/.cache/huggingface/hub/models--openai--clip-vit-base-patch16/snapshots/57c216476eefef5ab752ec549e440a49ae4ae5f3
+text_weights: /home/sergey/.cache/huggingface/hub/models--openai--clip-vit-base-patch16/snapshots/57c216476eefef5ab752ec549e440a49ae4ae5f3
+method: multiview_uniform_interaction
+preprocessing: multiscale
+epochs: 5
+batch_size: 32
+lr: 0.001
+hidden_dim: 256
+fusion_dim: 256
+split: reference
+sampler: by_dataset
+workers: 4
+cache_features: true
+feature_cache_dir: runs/feature_cache_multiview_clean
+device: cuda:1
+seed: 0
+mlflow: true
+mlflow_tracking_uri: sqlite:///mlflow.db
+mlflow_experiment: conditioned-iqa-performance
+mlflow_run_name: multiview-clean-uniform-interaction-s0
+config_dir: runs/configs

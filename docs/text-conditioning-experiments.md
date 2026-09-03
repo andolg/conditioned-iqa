@@ -448,6 +448,50 @@ SRCC, then report every held-out dataset and the mean/worst external metrics.
 **Question:** is the current `by_dataset` sampler the problem, or is the
 global target scale the problem?
 
+### D1 - GFIQA-20k expansion after KonIQ overlap screening
+
+Add GFIQA-20k as a fourth training source, but screen it before making the
+train/validation split. GFIQA filenames expose a Flickr source ID followed by
+a crop/variant suffix, while KonIQ filenames use the source ID directly. In
+the downloaded data, 213 source IDs in the labeled KonIQ table correspond to
+235 GFIQA rows; these rows are known same-photo crop/format near-duplicates and
+must not enter training. A second visual near-duplicate pass should be run to
+catch matches whose filenames do not preserve the source ID. Keep the screening
+manifest and its thresholds as an artifact of the run.
+
+Build a new table from KADID-10k + SPAQ + the screened GFIQA-20k rows +
+AIGCIQA2023. Use the same CLIP-B/16 representation, reference split, native
+interaction head and matched image-only control as the current finalist, with
+equal per-dataset sampling, best-validation-epoch restoration, and seeds 0--2.
+Do not use KonIQ labels during screening, splitting, model selection, or
+calibration.
+
+Evaluate TID2013, CSIQ, CID2013, KonIQ-10k, CLIVE, AGIQA-3K, PIPAL, and
+UHD-IQA as untouched external datasets. Report GFIQA validation metrics
+separately because GFIQA is now in training, and exclude it from the
+zero-shot external macro. Compare the new models with the existing
+three-dataset clean-mixture runs only on the common external datasets.
+
+**Question:** does adding a leakage-screened authentic face source improve
+authentic/high-resolution transfer, or does it mainly introduce a face-domain
+bias without helping the held-out datasets?
+
+**Gate:** keep the expansion only if the paired external macro and the worst
+held-out dataset improve without a material regression on KADID/SPAQ
+validation or a collapse in the prompt-intervention checks.
+
+**Execution record (2026-09-02):** The deterministic source-ID screen retained
+19,763 of 19,998 GFIQA rows and removed 235 rows sharing 213 labeled KonIQ
+source IDs. The shared training table therefore contains 43,413 rows, with no
+duplicate paths or missing files. The interaction head selected epochs 1, 4,
+and 3 for seeds 0--2 (macro validation SRCC 0.8571, 0.8517, and 0.8547); the
+matched image-only control selected epochs 4, 3, and 3 (0.8377, 0.8394, and
+0.8398). Across seeds, the interaction model reached 0.8545 validation SRCC
+and 0.6166 external SRCC, versus 0.8390 and 0.5971 for the matched control.
+The external aggregate covers TID2013, CSIQ, CID2013, KonIQ-10k, CLIVE,
+AGIQA-3K, PIPAL, and UHD-IQA; GFIQA is reported only as a training/validation
+dataset. Both rows use the matched 86.39M total model-parameter footprint.
+
 ### M3 - PIPAL within-reference ranking extension
 
 Add PIPAL to the best M1/M2 configuration, but never train it as ordinary
@@ -469,6 +513,18 @@ shuffled intervention matrix for conditioned heads.
 
 **Question:** are gains due to text semantics or simply additional head
 capacity?
+
+The seed-0 matched control is now complete on the exact row-14 training
+protocol: KADID-10k, SPAQ, and AIGCIQA2023; reference split; equal
+per-dataset M1 loss; and three calibrators. Its 529,763-parameter image-only
+head selected validation macro SRCC/PLCC `0.8278/0.8295`. The 529,415-parameter
+row-14 interaction head obtained `0.8407/0.8558` on the same split, while the
+ordinary 198,663-parameter image-only baseline obtained `0.8269/0.8326`.
+On the nine-dataset external suite, the matched-capacity control averaged
+`0.5747/0.5982` SRCC/PLCC, below row 14's `0.6238/0.6561`; it was lower on
+seven datasets and higher only on AGIQA-3K and PIPAL. Thus, in this one seed,
+capacity alone does not explain the interaction gain. Seeds 1--2 are still
+required before a final claim.
 
 ### E7 - External text encoders after objective stabilization
 
@@ -685,6 +741,154 @@ zero-shot semantic advantage. The held-out prompt is a new vector to a head
 trained on the other seven vectors, and the pooled CLIP feature still has to
 detect the relevant low-level artifact; the text alone cannot perform that
 extrapolation.
+
+### UHD-IQA official-split domain-adaptation probe
+
+UHD-IQA is a deliberately separate domain-adaptation experiment, not a
+zero-shot result. Its published partitions are retained exactly: 4,269 UHD
+images are eligible for optimization, 904 for epoch selection, and the 900
+official test images are written to a separate CSV that the training runner
+refuses to load. The old KADID/SPAQ/AIGCIQA rows receive a deterministic,
+reference-disjoint seed-0 split in the same manifest. The manifest is shared
+by every comparison and logged as an MLflow artifact.
+
+The first one-seed batch keeps the M1 objective fixed and compares the ordinary
+image-only calibrated baseline and calibrated native-CLIP interaction head.
+Both use equal per-dataset sampling and four learned training-dataset
+calibrators (KADID-10k, SPAQ, AIGCIQA2023, UHD-IQA). Only after epoch selection
+are they evaluated once on `uhd_official_test.csv`. The protocol builder is
+`build_uhd_official_training_data.py`; the valid UHD configs are 39 and 41.
+
+The first seed (`seed=0`) produced the following official 900-image UHD test
+scores:
+
+| head | validation macro SRCC | UHD test SRCC | UHD test PLCC |
+| --- | ---: | ---: | ---: |
+| ordinary image-only (198,663 parameters) | 0.7153 | 0.3869 | 0.3898 |
+| native-CLIP conditioned interaction (529,417) | 0.7556 | 0.5974 | 0.5338 |
+
+The earlier widened UHD image-only run is retained as a historical auxiliary
+result, but it cannot answer the head-capacity question: it belongs to a
+different four-dataset training setup than the row-14 best model. The valid
+capacity control is config 42, paired only with configs 25 and 27 on the
+original KADID-10k/SPAQ/AIGCIQA2023 mixture. This is a one-seed UHD result, not
+a final conclusion; repeat seeds 1--2 before reporting a mean or choosing a
+default.
+
+### Faithful MDTVSFA implementation
+
+The earlier M1 rows are explicitly an approximation: one learned sigmoid
+calibrator was trained with regression/ranking losses. They should not be
+described as a reproduction of MDTVSFA. The new
+`38_clean_multi_mdtvsfa_faithful_interaction.yaml` implementation follows the
+paper/reference design adapted to frozen-image/text features:
+
+1. a shared relative score `sigmoid(z)` trained with the vectorized
+   monotonicity-induced loss;
+2. a shared four-parameter logistic nonlinear mapping trained with the
+   centered-cosine (PLCC) linearity-induced loss; and
+3. a separate affine alignment layer per training dataset, initialized from
+   that dataset's raw-score range and trained with normalized L1 error.
+
+Each dataset contributes the sum of those three losses. Dataset batches are
+kept separate and shorter loaders are cycled, matching the reference mixed
+dataset procedure; the final aggregate is the reference softmax-weighted
+loss. Raw scores are used in their original units, with CSIQ/LIVE DMOS
+datasets oriented so higher still means better. Unknown test datasets use the
+shared perceptual stage because their alignment layer is unavailable.
+
+The three-seed pilot selected epochs 1, 1, and 0, respectively. Its held-out
+macro mean was `0.6169/0.6441` SRCC/PLCC, compared with
+`0.6191/0.6570` for the matched clean-mixture interaction control. Per-dataset
+SRCC means were:
+
+| AGIQA-3K | CID2013 | CLIVE | CSIQ | GFIQA-20K | KonIQ-10k | PIPAL | TID2013 | UHD-IQA |
+| ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| 0.7226 | 0.5983 | 0.7543 | 0.8239 | 0.6810 | 0.6748 | 0.4236 | 0.6607 | 0.2133 |
+
+The faithful objective improved KonIQ, CLIVE, GFIQA, and AGIQA slightly, but
+lost on CID2013, TID2013, PIPAL, and especially UHD-IQA. It therefore does
+not replace the current clean-interaction configuration as the default. The
+implementation is retained for controlled ablations and future objective
+work; the earlier M1 numbers remain the legacy approximation and must not be
+combined with this result.
+
+### H1: pooled MLP depth
+
+The depth follow-up tests whether the one-hidden-layer score MLP is limiting
+the conditioned interaction head. The implementation adds hidden-to-hidden
+GELU/dropout blocks while keeping `mlp_layers=1` identical to the historical
+head. All four runs use CLIP-B/16, the KADID-10k + SPAQ + AIGCIQA2023 clean
+mixture, the reference split, equal per-dataset legacy MDTVSFA weighting,
+three calibrators, five epochs, and seed 0. The image-only controls match the
+conditioned heads' total parameter counts: 595,115 vs. 595,207 for depth 2 and
+661,517 vs. 660,999 for depth 3.
+
+The external suite uses the eight unseen benchmark CSVs plus the complete
+6,073-image UHD-IQA CSV. UHD is zero-shot for these models because no UHD
+images enter their training table; the official 900-image split is reserved
+for the separate UHD-training experiments and is not mixed into this depth
+comparison.
+
+| head | selected epoch | validation SRCC/PLCC | full external SRCC/PLCC |
+| --- | ---: | ---: | ---: |
+| conditioned interaction, one hidden layer (reference) | 1 | 0.8407/0.8558 | 0.6238/0.6561* |
+| conditioned interaction, two hidden layers | 1 | 0.8452/0.8574 | 0.6246/0.6525 |
+| conditioned interaction, three hidden layers | 1 | 0.8406/0.8514 | 0.6171/0.6392 |
+| matched image-only, two hidden layers | 3 | 0.8282/0.8379 | 0.5879/0.6192 |
+| matched image-only, three hidden layers | 3 | 0.8353/0.8460 | 0.5868/0.6165 |
+
+\*The one-layer reference value is the existing row-14 result under the
+recent nine-dataset protocol; its UHD component was evaluated on the official
+900-image split, so it is shown only as a contextual reference and is not a
+strictly identical full-UHD comparison.
+
+Depth 2 is the only candidate with a positive validation and external
+movement over the one-layer interaction on this seed. On the eight datasets
+that are identical between the runs (excluding UHD), it reaches
+`0.6707/0.6979` versus `0.6655/0.6909` for the one-layer seed-0 reference
+(`+0.0052/+0.0070`), while its nine-dataset full-UHD mean is only `+0.0008`
+SRCC above the reference number because the UHD protocols differ. This still
+needs seeds 1--2. Depth 3 is worse externally,
+while both matched image-only controls remain substantially below their
+conditioned counterparts. The current evidence therefore does not support
+“the MLP is simply too small” as the sole explanation: extra depth may help
+slightly at depth 2, but it does not reproduce a broad generalization gain.
+
+### Backbone and representation follow-up (single seed)
+
+The current-best protocol was held fixed for the backbone comparison: frozen
+native image/text encoders, the clean KADID-10k + SPAQ + AIGCIQA2023 mixture,
+stretch preprocessing, equal per-dataset sampling, five epochs, and the
+best-validation checkpoint. Thus the CLIP-L and SigLIP rows are not selected
+from the later architecture search; they are direct backbone substitutions on
+the pre-existing best configuration. Every external value below uses all nine
+held-out CSVs, including the complete zero-shot UHD-IQA set.
+
+| configuration | selected epoch | validation mean SRCC/PLCC | external mean SRCC/PLCC | val+external mean SRCC/PLCC |
+| --- | ---: | ---: | ---: | ---: |
+| frozen SigLIP-L/16@256, native interaction | 2 | 0.8435/0.8511 | 0.6258/0.6464 | 0.7347/0.7487 |
+| frozen CLIP-L/14@336, native interaction | 1 | 0.8652/0.8783 | 0.6292/0.6570 | 0.7472/0.7677 |
+
+The same queue also tested representation/head hypotheses with CLIP-B/16. A
+five-view head (one global view plus four local tiles) improved both validation
+and external means over its matched image-only control, so its gain cannot be
+attributed to extra views alone. The pooled visual adapter and softmax source
+loss did not improve the native interaction control. These are deliberately
+single-seed exploratory results and are recorded in the sheet immediately
+after the backbone rows.
+
+| configuration | selected epoch | validation mean SRCC/PLCC | external mean SRCC/PLCC |
+| --- | ---: | ---: | ---: |
+| five-view native text interaction | 1 | 0.8721/0.8848 | 0.6580/0.6884 |
+| five-view image-only control | 4 | 0.8553/0.8680 | 0.6310/0.6578 |
+| pooled visual adapter + native interaction | 1 | 0.8318/0.8515 | 0.6160/0.6553 |
+| softmax source-loss weighting + native interaction | 1 | 0.8393/0.8542 | 0.6165/0.6415 |
+
+The full per-dataset values, parameter footprints, and run metadata are in
+the `28s_mur` sheet; the rows were appended after the last existing populated
+row and all metric cells remain numeric with the existing four-decimal display
+format.
 
 ### Original E0--E4 pilot
 

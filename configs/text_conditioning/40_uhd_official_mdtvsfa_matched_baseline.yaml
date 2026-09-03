@@ -1,0 +1,31 @@
+# Historical UHD-only widened-head ablation.  This is not the capacity control
+# for the row-14 best model because it adds UHD-IQA as a fourth training
+# dataset.  The correctly paired clean-mixture capacity control is config 42.
+data: /home/sergey/conditioned-iqa/data/multi_train_clean_uhd_official/labels.csv
+split_manifest: /home/sergey/conditioned-iqa/data/multi_train_clean_uhd_official/split_manifest.csv
+backbone: clip-base
+weights: /home/sergey/.cache/huggingface/hub/models--openai--clip-vit-base-patch16/snapshots/57c216476eefef5ab752ec549e440a49ae4ae5f3
+method: baseline
+preprocessing: stretch
+dataset_objective: mdtvsfa
+dataset_loss_weighting: mean
+ranking_weight: 0.05
+ranking_scope: dataset
+calibration_datasets: [aigciqa2023, kadid10k, spaq, uhdiqa]
+epochs: 5
+batch_size: 32
+lr: 0.001
+hidden_dim: 686
+split: reference
+sampler: by_dataset
+workers: 4
+cache_features: true
+device: cuda:2
+seed: 0
+mlflow: true
+mlflow_tracking_uri: sqlite:///mlflow.db
+mlflow_experiment: conditioned-iqa-uhd-adaptation
+mlflow_run_name: uhd-official-m1-matched-baseline-s0
+config_dir: runs/configs
+google_sheet_id: 1DZQKInig5PtctN23TXEkMzrdcc1uA9aATaxT3LTXYZY
+google_worksheet: Results

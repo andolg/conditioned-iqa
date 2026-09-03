@@ -30,8 +30,27 @@ from result_reporting import (
     measure_latency_memory,
     size_megabytes,
 )
-from text_conditioning.data import ConditionedIQADataset, FeatureDataset
-from text_conditioning.models import DatasetScaleHead, ResidualTextHead, TextFusionHead
+from text_conditioning.data import (
+    ConditionedIQADataset,
+    FeatureDataset,
+    dataset_score_ranges,
+)
+from text_conditioning.models import (
+    DatasetScaleHead,
+    MDTVSFAHead,
+    PatchWeightedHead,
+    GlobalPatchResidualHead,
+    GlobalTextPatchResidualHead,
+    GlobalTextCrossAttentionHead,
+    MultiViewQualityHead,
+    MultiViewTextFusionHead,
+    MultiViewUniformTextFusionHead,
+    AdapterTextFusionHead,
+    FiLMTextHead,
+    ResidualTextHead,
+    TextPatchWeightedHead,
+    TextFusionHead,
+)
 from text_conditioning.prompts import (
     GENERIC_PROMPT,
     GROUP_PROMPTS,
@@ -41,7 +60,7 @@ from text_conditioning.prompts import (
     wrong_group,
 )
 from text_conditioning.text_encoder import encode_prompts, load_frozen_text_encoder
-from train import BACKBONES, MLflowTracker, QualityMLP, embed, load_backbone
+from train import BACKBONES, MLflowTracker, QualityMLP, embed, embed_patches, load_backbone
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -53,12 +72,16 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--text-weights", default=None, help="local frozen text checkpoint; defaults to --weights")
     parser.add_argument("--text-encoder-id", default=None,
                         help="optional external text encoder ID; downloads only via the mirror helper")
-    parser.add_argument("--method", choices=["baseline", "concat", "interaction", "residual"], default="concat")
+    parser.add_argument("--method", choices=["baseline", "concat", "interaction", "residual", "film", "patch_weighted", "patch_interaction", "global_patch_residual", "global_text_patch_residual", "global_text_cross_attention", "multiview_baseline", "multiview_interaction", "multiview_uniform_interaction", "adapter_interaction"], default="concat")
     parser.add_argument("--epochs", type=int, default=5)
     parser.add_argument("--batch-size", type=int, default=32)
     parser.add_argument("--lr", type=float, default=1e-3)
     parser.add_argument("--hidden-dim", type=int, default=256)
     parser.add_argument("--fusion-dim", type=int, default=256)
+    parser.add_argument(
+        "--mlp-layers", type=int, default=1,
+        help="number of hidden layers in the pooled score MLP (1 preserves the baseline)",
+    )
     parser.add_argument("--condition-dropout", type=float, default=0.0,
                         help="probability of replacing a training condition with zero text")
     parser.add_argument("--train-paraphrases", action="store_true",
@@ -66,15 +89,22 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--paraphrase-consistency-weight", type=float, default=0.0,
                         help="weight of the second-paraphrase prediction consistency loss")
     parser.add_argument("--split", choices=["reference", "random"], default="reference")
+    parser.add_argument(
+        "--split-manifest", default=None,
+        help=(
+            "CSV with path and partition columns (train/validation). When supplied, "
+            "it replaces the generated split and is checked for overlap or missing rows."
+        ),
+    )
     parser.add_argument("--score-column", default="scaled_subjective_score")
     parser.add_argument(
-        "--preprocessing", choices=("stretch", "resize_center_crop"), default="stretch",
+        "--preprocessing", choices=("stretch", "resize_center_crop", "multiscale"), default="stretch",
         help="image preprocessing; resize_center_crop matches CLIP's native preprocessing",
     )
     parser.add_argument("--sampler", choices=["random", "balanced", "by_level", "by_dataset"], default="random")
     parser.add_argument(
-        "--dataset-objective", choices=("global", "mdtvsfa"), default="global",
-        help="global min-max regression or shared latent plus monotonic dataset calibration",
+        "--dataset-objective", choices=("global", "mdtvsfa", "mdtvsfa_faithful"), default="global",
+        help="global regression, the legacy calibration approximation, or faithful three-stage MDTVSFA",
     )
     parser.add_argument(
         "--dataset-loss-weighting", choices=("mean", "softmax"), default="mean",
@@ -124,6 +154,65 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     if args.data is None:
         parser.error("--data is required, either directly or through --config")
     return args
+
+
+def split_from_manifest(
+    dataset: ConditionedIQADataset, manifest_path: str | Path,
+) -> tuple[ConditionedIQADataset, ConditionedIQADataset]:
+    """Use a predeclared train/validation split without admitting test rows.
+
+    A manifest is needed when a source publishes official partitions (such as
+    UHD-IQA).  It also makes paired baseline/conditioned runs use exactly the
+    same examples rather than independently drawing a reference split.
+    """
+    manifest_path = Path(manifest_path).expanduser()
+    manifest = pd.read_csv(manifest_path)
+    required = {"path", "partition"}
+    missing_columns = required.difference(manifest.columns)
+    if missing_columns:
+        raise ValueError(
+            f"split manifest {manifest_path} lacks columns: {', '.join(sorted(missing_columns))}"
+        )
+    manifest = manifest[["path", "partition"]].copy()
+    manifest["path"] = manifest["path"].astype(str)
+    manifest["partition"] = manifest["partition"].astype(str).str.lower()
+    if manifest["path"].duplicated().any():
+        raise ValueError(f"split manifest {manifest_path} contains duplicate image paths")
+    allowed = {"train", "validation"}
+    invalid = sorted(set(manifest["partition"]).difference(allowed))
+    if invalid:
+        raise ValueError(
+            f"split manifest {manifest_path} has forbidden partitions {invalid}; "
+            "only train and validation rows may enter the training runner"
+        )
+
+    rows = dataset.rows.copy()
+    rows["path"] = rows["path"].astype(str)
+    if rows["path"].duplicated().any():
+        raise ValueError("training CSV contains duplicate image paths; cannot apply a safe split manifest")
+    manifest_partitions = manifest.set_index("path")["partition"]
+    partitions = rows["path"].map(manifest_partitions)
+    if partitions.isna().any():
+        examples = rows.loc[partitions.isna(), "path"].head(3).tolist()
+        raise ValueError(f"split manifest is missing {partitions.isna().sum()} training rows, e.g. {examples}")
+    extra_paths = set(manifest_partitions.index).difference(rows["path"])
+    if extra_paths:
+        raise ValueError(
+            f"split manifest contains {len(extra_paths)} paths outside the training CSV; "
+            "build a manifest only for the train/validation source table"
+        )
+
+    # Synthetic variants of a reference must not cross the boundary.  For
+    # authentic datasets references are normally unique, so this is harmless.
+    leak_check = rows.assign(partition=partitions).groupby(["dataset", "reference"])["partition"].nunique()
+    if (leak_check > 1).any():
+        leaked = leak_check[leak_check > 1].index[0]
+        raise ValueError(f"reference split leak for dataset/reference {leaked}")
+    train_rows = rows.loc[partitions.eq("train")].drop(columns="partition", errors="ignore")
+    validation_rows = rows.loc[partitions.eq("validation")].drop(columns="partition", errors="ignore")
+    if train_rows.empty or validation_rows.empty:
+        raise ValueError("split manifest must contain non-empty train and validation partitions")
+    return dataset.subset(train_rows), dataset.subset(validation_rows)
 
 
 class PromptBank:
@@ -180,9 +269,15 @@ def evaluate(
         np.random.default_rng(0).shuffle(shuffled_groups)
     with torch.no_grad():
         for batch in loader:
-            vision = batch_vision(backbone, batch, device)
+            base = head.latent if isinstance(head, (DatasetScaleHead, MDTVSFAHead)) else head
+            view_head = getattr(base, "requires_view_features", False)
+            patch_head = getattr(base, "requires_patch_tokens", False)
+            vision = (batch_vision(backbone, batch, device), batch_patches(backbone, batch, device)) if getattr(base, "requires_pooled_features", False) else (batch_patches(backbone, batch, device) if patch_head else batch_vision(backbone, batch, device))
             if prompts is None:
-                prediction = head(vision, datasets=batch["dataset"]) if isinstance(head, DatasetScaleHead) else head(vision)
+                prediction = (
+                    head(vision, datasets=batch["dataset"])
+                    if isinstance(head, (DatasetScaleHead, MDTVSFAHead)) else head(vision)
+                )
             else:
                 groups = batch["group"] if shuffled_groups is None else shuffled_groups[offset:offset + len(batch["group"])]
                 text = prompts.for_groups(
@@ -190,7 +285,7 @@ def evaluate(
                 )
                 prediction = (
                     head(vision, text, datasets=batch["dataset"])
-                    if isinstance(head, DatasetScaleHead) else head(vision, text)
+                    if isinstance(head, (DatasetScaleHead, MDTVSFAHead)) else head(vision, text)
                 )
                 offset += len(batch["group"])
             predictions.append(prediction.cpu().numpy())
@@ -245,6 +340,82 @@ def pairwise_ranking_loss(
     return torch.stack(losses).mean()
 
 
+def monotonicity_induced_loss(relative: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
+    """MDTVSFA's list-wise monotonicity surrogate for one dataset batch."""
+    count = relative.numel()
+    if count < 2:
+        return relative.sum() * 0.0
+    prediction_delta = relative[:, None] - relative[None, :]
+    target_direction = torch.sign(target[None, :] - target[:, None])
+    errors = torch.relu(prediction_delta * target_direction)
+    return errors.sum() / (count * (count - 1))
+
+
+def linearity_induced_loss(perceptual: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
+    """One minus centered cosine similarity, the differentiable PLCC loss."""
+    if perceptual.numel() < 2:
+        return perceptual.sum() * 0.0
+    centered_prediction = perceptual - perceptual.mean()
+    centered_target = target - target.mean()
+    prediction_norm = centered_prediction.norm()
+    target_norm = centered_target.norm()
+    if prediction_norm.item() == 0.0 or target_norm.item() == 0.0:
+        return perceptual.sum() * 0.0
+    correlation = torch.sum(centered_prediction * centered_target) / (prediction_norm * target_norm)
+    return (1.0 - correlation.clamp(-1.0, 1.0)) / 2.0
+
+
+def error_induced_loss(
+    aligned: torch.Tensor, target: torch.Tensor, score_range: tuple[float, float] | None,
+) -> torch.Tensor:
+    """Normalized L1 loss after dataset-specific perceptual-scale alignment."""
+    low, high = score_range or (0.0, 1.0)
+    scale = max(float(high) - float(low), 1e-6)
+    return torch.mean(torch.abs(aligned - target)) / scale
+
+
+def mdtvsfa_dataset_losses(
+    relative: torch.Tensor,
+    perceptual: torch.Tensor,
+    aligned: torch.Tensor,
+    target: torch.Tensor,
+    datasets: list[str] | tuple[str, ...],
+    score_ranges: dict[str, tuple[float, float]],
+    *,
+    pipal_ranking_only: bool = False,
+) -> dict[str, torch.Tensor]:
+    """Compute all three MDTVSFA losses separately for each dataset."""
+    losses: dict[str, torch.Tensor] = {}
+    for name in sorted(set(str(value) for value in datasets)):
+        mask = torch.tensor([str(value) == name for value in datasets], device=target.device)
+        relative_d = relative[mask]
+        perceptual_d = perceptual[mask]
+        aligned_d = aligned[mask]
+        target_d = target[mask]
+        relative_loss = monotonicity_induced_loss(relative_d, target_d)
+        linearity_loss = linearity_induced_loss(perceptual_d, target_d)
+        error_loss = (
+            target_d.sum() * 0.0
+            if pipal_ranking_only and name == "pipal"
+            else error_induced_loss(aligned_d, target_d, score_ranges.get(name))
+        )
+        losses[name] = relative_loss + linearity_loss + error_loss
+    return losses
+
+
+def aggregate_mdtvsfa_losses(losses: list[torch.Tensor], weighting: str) -> torch.Tensor:
+    """Aggregate per-dataset three-stage losses like the MDTVSFA paper."""
+    if not losses:
+        raise RuntimeError("empty MDTVSFA loss list")
+    values = torch.stack(losses)
+    if weighting == "softmax":
+        # This intentionally retains the gradient through the weights, matching
+        # the released implementation's exp(loss) weighted objective.
+        weights = torch.softmax(values, dim=0)
+        return torch.sum(weights * values)
+    return values.mean()
+
+
 def aggregate_dataset_losses(
     losses: list[torch.Tensor], weighting: str,
 ) -> torch.Tensor:
@@ -259,7 +430,8 @@ def aggregate_dataset_losses(
 
 
 def load_feature_map(dataset: ConditionedIQADataset, backbone, device: torch.device,
-                     batch_size: int, workers: int, cache_dir: str, cache_key: str) -> dict[str, torch.Tensor]:
+                     batch_size: int, workers: int, cache_dir: str, cache_key: str,
+                     include_patches: bool = False, include_views: bool = False) -> dict[str, torch.Tensor | dict[str, torch.Tensor]]:
     """Precompute/reuse frozen features, keyed by the source image path."""
     cache_root = Path(cache_dir).expanduser()
     cache_root.mkdir(parents=True, exist_ok=True)
@@ -270,35 +442,131 @@ def load_feature_map(dataset: ConditionedIQADataset, backbone, device: torch.dev
         payload = torch.load(cache_path, map_location="cpu", weights_only=True)
         if payload.get("paths") == paths and payload.get("cache_key", cache_key) == cache_key:
             print(f"reusing frozen feature cache {cache_path}", flush=True)
+            if include_views:
+                if "view_features" not in payload:
+                    raise ValueError(f"feature cache {cache_path} lacks multi-view features")
+                return {path: {"views": views} for path, views in zip(paths, payload["view_features"])}
+            if include_patches:
+                if "patch_features" not in payload:
+                    raise ValueError(f"feature cache {cache_path} lacks patch tokens")
+                return {path: {"pooled": pooled, "patches": patches} for path, pooled, patches in zip(paths, payload["features"], payload["patch_features"])}
             return {path: feature for path, feature in zip(paths, payload["features"])}
     # Leave-one-group-out and mixture subsets can reuse a previously computed
     # superset cache without a second backbone pass.
     requested = set(paths)
+    source_key = cache_key.rsplit("|", 1)[0]
     for candidate in cache_root.glob("*.pt"):
         if candidate == cache_path:
             continue
         payload = torch.load(candidate, map_location="cpu", weights_only=True)
         cached_paths = payload.get("paths", [])
-        if requested.issubset(cached_paths) and payload.get("cache_key", cache_key) == cache_key:
-            lookup = {path: feature for path, feature in zip(cached_paths, payload["features"])}
+        candidate_key = str(payload.get("cache_key", ""))
+        same_source = candidate_key == cache_key or candidate_key.rsplit("|", 1)[0] == source_key
+        if requested.issubset(cached_paths) and same_source and (not include_patches or "patch_features" in payload) and (not include_views or "view_features" in payload):
             print(f"reusing superset frozen feature cache {candidate}", flush=True)
+            if include_views:
+                view_lookup = {path: feature for path, feature in zip(cached_paths, payload["view_features"])}
+                return {path: {"views": view_lookup[path]} for path in paths}
+            lookup = {path: feature for path, feature in zip(cached_paths, payload["features"])}
+            if include_patches:
+                patch_lookup = {path: feature for path, feature in zip(cached_paths, payload["patch_features"])}
+                return {path: {"pooled": lookup[path], "patches": patch_lookup[path]} for path in paths}
             return {path: lookup[path] for path in paths}
     loader = DataLoader(dataset, batch_size=batch_size, num_workers=workers)
-    features = []
+    features, patch_features, view_features = [], [], []
     started = time.perf_counter()
     with torch.no_grad():
         for batch in loader:
-            features.append(embed(backbone, batch["image"].to(device)).cpu())
-    stacked = torch.cat(features, dim=0)
-    torch.save({"paths": paths, "features": stacked, "cache_key": cache_key}, cache_path)
+            if include_views:
+                images = batch["image_views"].to(device)
+                actual_batch, view_count = images.shape[:2]
+                output = backbone(pixel_values=images.reshape(actual_batch * view_count, *images.shape[2:]))
+                view_features.append(output.pooler_output.reshape(actual_batch, view_count, -1).float().cpu())
+                continue
+            images = batch["image"].to(device)
+            output = backbone(pixel_values=images)
+            features.append(output.pooler_output.float().cpu())
+            if include_patches:
+                patch_features.append(output.last_hidden_state[:, 1:].float().cpu())
+    stacked = None if include_views else torch.cat(features, dim=0)
+    payload = {"paths": paths, "features": stacked, "cache_key": cache_key}
+    if include_views:
+        payload["view_features"] = torch.cat(view_features, dim=0).half()
+    if include_views:
+        torch.save(payload, cache_path)
+        print(f"cached {len(paths)} multi-view features in {time.perf_counter() - started:.1f}s -> {cache_path}", flush=True)
+        return {path: {"views": views} for path, views in zip(paths, payload["view_features"])}
+    if include_patches:
+        # Patch tokens dominate storage (28k CLIP-B images are ~17 GiB in
+        # float32).  They come from a frozen encoder, so store losslessly
+        # enough for this head experiment in float16 and cast at consumption.
+        payload["patch_features"] = torch.cat(patch_features, dim=0).half()
+    torch.save(payload, cache_path)
     print(f"cached {len(paths)} frozen features in {time.perf_counter() - started:.1f}s -> {cache_path}", flush=True)
+    if include_patches:
+        return {path: {"pooled": pooled, "patches": patches} for path, pooled, patches in zip(paths, stacked, payload["patch_features"])}
     return {path: feature for path, feature in zip(paths, stacked)}
 
 
 def batch_vision(backbone, batch: dict, device: torch.device) -> torch.Tensor:
+    if "view_features" in batch:
+        return batch["view_features"].to(device).float()
     if "features" in batch:
         return batch["features"].to(device)
+    if "image_views" in batch:
+        views = batch["image_views"].to(device)
+        actual_batch, view_count = views.shape[:2]
+        embeddings = embed(backbone, views.reshape(actual_batch * view_count, *views.shape[2:]))
+        return embeddings.reshape(actual_batch, view_count, -1)
     return embed(backbone, batch["image"].to(device))
+
+
+def batch_patches(backbone, batch: dict, device: torch.device) -> torch.Tensor:
+    if "patch_features" in batch:
+        return batch["patch_features"].to(device).float()
+    return embed_patches(backbone, batch["image"].to(device))
+
+
+def build_mdtvsfa_loaders(train_set, args) -> dict[str, DataLoader]:
+    """Build one shuffled loader per dataset for faithful MDTVSFA training.
+
+    The released MDTVSFA loader presents a batch from every dataset at each
+    optimization step.  Keeping dataset batches separate gives the ranking and
+    correlation losses enough within-dataset examples and avoids accidental
+    cross-dataset pairs in a mixed batch.
+    """
+    names = sorted(str(name) for name in train_set.rows["dataset"].unique())
+    loaders = {}
+    for offset, name in enumerate(names):
+        subset = train_set.subset(train_set.rows[train_set.rows["dataset"] == name])
+        sampler_name = args.sampler if args.sampler != "by_dataset" else "random"
+        sampler = make_sampler(subset, sampler_name, seed=args.seed + offset)
+        loaders[name] = DataLoader(
+            subset,
+            batch_size=args.batch_size,
+            sampler=sampler,
+            shuffle=sampler is None,
+            drop_last=len(subset) >= args.batch_size,
+            num_workers=args.workers,
+        )
+    return loaders
+
+
+def iter_mdtvsfa_batches(loaders: dict[str, DataLoader]):
+    """Cycle shorter dataset loaders while stepping through the longest one."""
+    if not loaders:
+        return
+    steps = max(len(loader) for loader in loaders.values())
+    iterators = {name: iter(loader) for name, loader in loaders.items()}
+    for _ in range(steps):
+        grouped = {}
+        for name, loader in loaders.items():
+            try:
+                grouped[name] = next(iterators[name])
+            except StopIteration:
+                iterators[name] = iter(loader)
+                grouped[name] = next(iterators[name])
+        yield grouped
 
 
 def main() -> None:
@@ -318,23 +586,57 @@ def main() -> None:
         excluded = {str(group) for group in args.exclude_groups}
         dataset = dataset.subset(dataset.rows[~raw_groups.isin(excluded)])
         print(f"excluded groups {sorted(excluded)}; remaining rows {len(dataset)}", flush=True)
-    train_set, val_set = split_by(dataset, args.split, fraction=0.2, seed=args.seed)
+    if args.split_manifest:
+        train_set, val_set = split_from_manifest(dataset, args.split_manifest)
+        print(
+            f"using split manifest {args.split_manifest}: "
+            f"train {len(train_set)}, validation {len(val_set)}",
+            flush=True,
+        )
+    else:
+        train_set, val_set = split_by(dataset, args.split, fraction=0.2, seed=args.seed)
     if args.limit and args.limit < len(train_set.rows):
         train_set = train_set.subset(train_set.rows.sample(args.limit, random_state=args.seed))
     if args.cache_features:
+        include_patches = args.method in {"patch_weighted", "patch_interaction", "global_patch_residual", "global_text_patch_residual", "global_text_cross_attention"}
+        include_views = args.method in {"multiview_baseline", "multiview_interaction", "multiview_uniform_interaction"}
+        cache_dataset = dataset
+        if args.limit and args.limit < len(train_set.rows):
+            # A smoke/limited run should not spend time encoding examples that
+            # cannot participate in training or validation.
+            cache_rows = pd.concat([train_set.rows, val_set.rows], ignore_index=True)
+            cache_dataset = dataset.subset(cache_rows)
         feature_map = load_feature_map(
-            dataset, backbone, device, args.batch_size, args.workers, args.feature_cache_dir,
-            f"{args.data}|{args.backbone}|{args.weights}|{args.preprocessing}",
+            cache_dataset, backbone, device, args.batch_size, args.workers, args.feature_cache_dir,
+            f"{args.data}|{args.backbone}|{args.weights}|{args.preprocessing}|{'views' if include_views else ('patches' if include_patches else 'pooled')}",
+            include_patches=include_patches, include_views=include_views,
         )
         train_set = FeatureDataset(train_set, feature_map)
         val_set = FeatureDataset(val_set, feature_map)
-    sampler = make_sampler(train_set, args.sampler, seed=args.seed)
-    train_loader = DataLoader(train_set, batch_size=args.batch_size, sampler=sampler, shuffle=sampler is None, num_workers=args.workers)
+    faithful_loaders = None
+    if args.dataset_objective == "mdtvsfa_faithful":
+        # The faithful objective consumes one batch per dataset at each step;
+        # a single mixed loader cannot provide the per-dataset stage losses.
+        train_loader = None
+        faithful_loaders = build_mdtvsfa_loaders(train_set, args)
+    else:
+        sampler = make_sampler(train_set, args.sampler, seed=args.seed)
+        train_loader = DataLoader(
+            train_set, batch_size=args.batch_size, sampler=sampler,
+            shuffle=sampler is None, num_workers=args.workers,
+        )
     val_loader = DataLoader(val_set, batch_size=args.batch_size, num_workers=args.workers)
     prompts = None
     text_weights = None
-    if args.method == "baseline":
-        head = QualityMLP(vision_dim, args.hidden_dim).to(device)
+    if args.method in {"baseline", "multiview_baseline"}:
+        if args.method == "multiview_baseline":
+            head = MultiViewQualityHead(vision_dim, args.fusion_dim, args.hidden_dim).to(device)
+        else:
+            head = QualityMLP(vision_dim, args.hidden_dim, mlp_layers=args.mlp_layers).to(device)
+    elif args.method == "patch_weighted":
+        head = PatchWeightedHead(vision_dim, args.hidden_dim).to(device)
+    elif args.method == "global_patch_residual":
+        head = GlobalPatchResidualHead(vision_dim, args.hidden_dim).to(device)
     else:
         model_id = args.text_encoder_id or BACKBONES[args.backbone][0]
         text_weights = args.text_weights or (None if args.text_encoder_id else args.weights)
@@ -345,13 +647,35 @@ def main() -> None:
         del text_encoder
         if device.type == "cuda":
             torch.cuda.empty_cache()
-        if args.method == "residual":
+        if args.method == "multiview_interaction":
+            head = MultiViewTextFusionHead(vision_dim, text_dim, args.fusion_dim, args.hidden_dim).to(device)
+        elif args.method == "multiview_uniform_interaction":
+            head = MultiViewUniformTextFusionHead(vision_dim, text_dim, args.fusion_dim, args.hidden_dim).to(device)
+        elif args.method == "adapter_interaction":
+            head = AdapterTextFusionHead(vision_dim, text_dim, args.fusion_dim, args.hidden_dim, mlp_layers=args.mlp_layers).to(device)
+        elif args.method == "film":
+            head = FiLMTextHead(vision_dim, text_dim, args.fusion_dim, args.hidden_dim).to(device)
+        elif args.method == "global_text_cross_attention":
+            head = GlobalTextCrossAttentionHead(vision_dim, text_dim, args.fusion_dim, args.hidden_dim).to(device)
+        elif args.method == "global_text_patch_residual":
+            head = GlobalTextPatchResidualHead(vision_dim, text_dim, args.fusion_dim, args.hidden_dim).to(device)
+        elif args.method == "patch_interaction":
+            head = TextPatchWeightedHead(vision_dim, text_dim, args.fusion_dim, args.hidden_dim).to(device)
+        elif args.method == "residual":
             head = ResidualTextHead(vision_dim, text_dim, args.fusion_dim, args.hidden_dim).to(device)
         else:
-            head = TextFusionHead(vision_dim, text_dim, args.fusion_dim, args.hidden_dim, args.method == "interaction").to(device)
+            head = TextFusionHead(
+                vision_dim, text_dim, args.fusion_dim, args.hidden_dim,
+                args.method == "interaction", mlp_layers=args.mlp_layers,
+            ).to(device)
+    score_ranges = {}
     if args.dataset_objective == "mdtvsfa":
         training_datasets = args.calibration_datasets or sorted(train_set.rows["dataset"].astype(str).unique())
         head = DatasetScaleHead(head, training_datasets).to(device)
+    elif args.dataset_objective == "mdtvsfa_faithful":
+        training_datasets = args.calibration_datasets or sorted(train_set.rows["dataset"].astype(str).unique())
+        score_ranges = dataset_score_ranges(train_set.rows, args.score_column)
+        head = MDTVSFAHead(head, training_datasets, score_ranges).to(device)
     else:
         training_datasets = []
     optimizer = torch.optim.AdamW(head.parameters(), lr=args.lr)
@@ -360,9 +684,12 @@ def main() -> None:
     reporter = ResultReporter.from_args(args)
     run_id = tracker.mlflow.active_run().info.run_id if tracker.mlflow is not None else ""
     if tracker.mlflow is not None:
+        if args.split_manifest:
+            tracker.mlflow.log_artifact(str(Path(args.split_manifest).expanduser()), artifact_path="splits")
         tracker.mlflow.set_tags({"conditioning/method": args.method, "conditioning/text_encoder": model_id if prompts else "none"})
         tracker.mlflow.log_params({
             "fusion_dim": args.fusion_dim,
+            "mlp_layers": args.mlp_layers,
             "condition_dropout": args.condition_dropout,
             "train_paraphrases": args.train_paraphrases,
             "paraphrase_consistency_weight": args.paraphrase_consistency_weight,
@@ -373,6 +700,7 @@ def main() -> None:
             "ranking_scope": args.ranking_scope,
             "pipal_ranking_only": args.pipal_ranking_only,
             "calibration_datasets": ",".join(training_datasets),
+            "score_column": args.score_column,
         })
     print(f"{args.method}: {args.backbone} on {device}; train {len(train_set)}, validation {len(val_set)}")
     try:
@@ -383,17 +711,56 @@ def main() -> None:
         best_head_state = None
         for epoch in range(args.epochs):
             losses = []
-            for batch in train_loader:
-                vision = batch_vision(backbone, batch, device)
-                if prompts is None:
-                    prediction = head(vision, datasets=batch["dataset"]) if isinstance(head, DatasetScaleHead) else head(vision)
+            batches = iter_mdtvsfa_batches(faithful_loaders) if faithful_loaders is not None else train_loader
+            for batch in batches:
+                if args.dataset_objective == "mdtvsfa_faithful":
+                    dataset_losses = []
+                    consistency_losses = []
+                    for _, dataset_batch in batch.items():
+                        vision = batch_vision(backbone, dataset_batch, device)
+                        if prompts is None:
+                            text = None
+                        else:
+                            prompt_mode = "train_paraphrase" if args.train_paraphrases else "correct"
+                            text = prompts.for_groups(dataset_batch["group"], device, prompt_mode)
+                            if args.condition_dropout:
+                                text[torch.rand(len(text), device=device) < args.condition_dropout] = 0
+                        targets = dataset_batch["target"].to(device)
+                        batch_datasets = [str(value) for value in dataset_batch["dataset"]]
+                        relative, perceptual, aligned = head.stages(
+                            vision, text, datasets=batch_datasets
+                        )
+                        per_dataset = mdtvsfa_dataset_losses(
+                            relative, perceptual, aligned, targets, batch_datasets, score_ranges,
+                            pipal_ranking_only=args.pipal_ranking_only,
+                        )
+                        dataset_losses.extend(per_dataset.values())
+                        if prompts is not None and args.paraphrase_consistency_weight:
+                            alternate = prompts.for_groups(dataset_batch["group"], device, "train_paraphrase")
+                            _, _, alternate_aligned = head.stages(
+                                vision, alternate, datasets=batch_datasets
+                            )
+                            consistency_losses.append(torch.mean(torch.abs(aligned - alternate_aligned)))
+                    loss = aggregate_mdtvsfa_losses(dataset_losses, args.dataset_loss_weighting)
+                    if consistency_losses:
+                        loss = loss + args.paraphrase_consistency_weight * torch.stack(consistency_losses).mean()
                 else:
-                    prompt_mode = "train_paraphrase" if args.train_paraphrases else "correct"
-                    text = prompts.for_groups(batch["group"], device, prompt_mode)
-                    if args.condition_dropout:
-                        text[torch.rand(len(text), device=device) < args.condition_dropout] = 0
-                    prediction = head(vision, text, datasets=batch["dataset"]) if isinstance(head, DatasetScaleHead) else head(vision, text)
-                targets = batch["target"].to(device)
+                    vision = (batch_vision(backbone, batch, device), batch_patches(backbone, batch, device)) if args.method in {"global_patch_residual", "global_text_patch_residual", "global_text_cross_attention"} else (batch_patches(backbone, batch, device) if args.method in {"patch_weighted", "patch_interaction"} else batch_vision(backbone, batch, device))
+                    if prompts is None:
+                        prediction = (
+                            head(vision, datasets=batch["dataset"])
+                            if isinstance(head, DatasetScaleHead) else head(vision)
+                        )
+                    else:
+                        prompt_mode = "train_paraphrase" if args.train_paraphrases else "correct"
+                        text = prompts.for_groups(batch["group"], device, prompt_mode)
+                        if args.condition_dropout:
+                            text[torch.rand(len(text), device=device) < args.condition_dropout] = 0
+                        prediction = (
+                            head(vision, text, datasets=batch["dataset"])
+                            if isinstance(head, DatasetScaleHead) else head(vision, text)
+                        )
+                    targets = batch["target"].to(device)
                 if args.dataset_objective == "mdtvsfa":
                     regression_losses = []
                     batch_datasets = [str(value) for value in batch["dataset"]]
@@ -412,9 +779,9 @@ def main() -> None:
                             prediction, targets, batch_datasets, list(batch["reference"]), ranking_scope
                         )
                         loss = loss + args.ranking_weight * ranking
-                else:
+                elif args.dataset_objective != "mdtvsfa_faithful":
                     loss = loss_fn(prediction, targets)
-                if prompts is not None and args.paraphrase_consistency_weight:
+                if args.dataset_objective != "mdtvsfa_faithful" and prompts is not None and args.paraphrase_consistency_weight:
                     alternate = prompts.for_groups(batch["group"], device, "train_paraphrase")
                     alternate_prediction = (
                         head(vision, alternate, datasets=batch["dataset"])
@@ -467,7 +834,11 @@ def main() -> None:
             print(f"paraphrase_worst: macro SRCC {worst_paraphrase:.4f}", flush=True)
         images_per_second = final_validation_scores["images"] / final_validation_scores["elapsed_seconds"]
         def forward_once():
-            features = embed(backbone, torch.randn(1, 3, image_size, image_size, device=device))
+            images = torch.randn((5, 3, image_size, image_size), device=device) if args.method in {"multiview_baseline", "multiview_interaction", "multiview_uniform_interaction"} else torch.randn(1, 3, image_size, image_size, device=device)
+            if args.method in {"multiview_baseline", "multiview_interaction", "multiview_uniform_interaction"}:
+                features = embed(backbone, images).unsqueeze(0)
+            else:
+                features = (embed(backbone, images), embed_patches(backbone, images)) if args.method in {"global_patch_residual", "global_text_patch_residual", "global_text_cross_attention"} else (embed_patches(backbone, images) if args.method in {"patch_weighted", "patch_interaction"} else embed(backbone, images))
             if prompts is None:
                 return head(features)
             return head(features, torch.randn(1, text_dim, device=device))

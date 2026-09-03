@@ -46,17 +46,26 @@ BACKBONES = {
 
 
 class QualityMLP(nn.Module):
-    """LayerNorm -> Linear -> GELU -> Dropout -> Linear -> one number."""
+    """LayerNorm -> configurable MLP -> one quality score."""
 
-    def __init__(self, input_dim: int, hidden_dim: int = 256, dropout: float = 0.1):
+    def __init__(
+        self,
+        input_dim: int,
+        hidden_dim: int = 256,
+        dropout: float = 0.1,
+        mlp_layers: int = 1,
+    ):
         super().__init__()
-        self.net = nn.Sequential(
-            nn.LayerNorm(input_dim),
-            nn.Linear(input_dim, hidden_dim),
-            nn.GELU(),
-            nn.Dropout(dropout),
-            nn.Linear(hidden_dim, 1),
-        )
+        # Keep the implementation local to avoid coupling the legacy runner
+        # to the conditioned-head module, while matching its depth semantics.
+        if mlp_layers < 1:
+            raise ValueError(f"mlp_layers must be >= 1, got {mlp_layers}")
+        layers: list[nn.Module] = [nn.LayerNorm(input_dim)]
+        layers.extend((nn.Linear(input_dim, hidden_dim), nn.GELU(), nn.Dropout(dropout)))
+        for _ in range(mlp_layers - 1):
+            layers.extend((nn.Linear(hidden_dim, hidden_dim), nn.GELU(), nn.Dropout(dropout)))
+        layers.append(nn.Linear(hidden_dim, 1))
+        self.net = nn.Sequential(*layers)
 
     def forward(self, features: torch.Tensor) -> torch.Tensor:
         return self.net(features).squeeze(-1)
@@ -79,6 +88,12 @@ def load_backbone(name: str, weights: str | None, device: torch.device):
 @torch.no_grad()
 def embed(backbone, images: torch.Tensor) -> torch.Tensor:
     return backbone(pixel_values=images).pooler_output.float()
+
+
+@torch.no_grad()
+def embed_patches(backbone, images: torch.Tensor) -> torch.Tensor:
+    """Return frozen spatial patch tokens, excluding CLIP's class token."""
+    return backbone(pixel_values=images).last_hidden_state[:, 1:].float()
 
 
 def evaluate(backbone, head, loader, device) -> dict:

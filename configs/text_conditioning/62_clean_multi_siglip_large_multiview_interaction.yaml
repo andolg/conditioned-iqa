@@ -1,0 +1,24 @@
+# Five-view backbone comparison: SigLIP-L/16@256 with the SOTA head.
+data: /home/sergey/conditioned-iqa/data/multi_train_clean/labels.csv
+backbone: siglip
+weights: /home/sergey/.cache/huggingface/hub/models--google--siglip-large-patch16-256/snapshots/d0da9f876e7d66b4e250cd2450c3ba2ce735e447
+text_weights: /home/sergey/.cache/huggingface/hub/models--google--siglip-large-patch16-256/snapshots/d0da9f876e7d66b4e250cd2450c3ba2ce735e447
+method: multiview_interaction
+preprocessing: multiscale
+epochs: 5
+batch_size: 32
+lr: 0.001
+hidden_dim: 256
+fusion_dim: 256
+split: reference
+sampler: by_dataset
+workers: 4
+cache_features: true
+feature_cache_dir: runs/feature_cache_siglip_large_multiview_clean
+device: cuda:4
+seed: 0
+mlflow: true
+mlflow_tracking_uri: sqlite:///mlflow.db
+mlflow_experiment: conditioned-iqa-performance
+mlflow_run_name: multiview-siglip-large-clean-interaction-s0
+config_dir: runs/configs

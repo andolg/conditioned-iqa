@@ -45,6 +45,7 @@ all.csv
 *.npy
 *.log
 runs/feature_cache/
+runs/.sheet_export.lock
 
 # Local experiments: scratch scripts, notebooks, throwaway configs
 scratch*
