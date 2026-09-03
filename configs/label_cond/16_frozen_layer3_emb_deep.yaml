@@ -1,0 +1,6 @@
+run_name: frozen-trained-layer3-emb32-deep-concat-kadid
+training_mode: frozen
+classifier_labels: soft
+classifier_feature_layer: layer3
+cls_emb_size: 32
+hidden_dim: [256, 256]

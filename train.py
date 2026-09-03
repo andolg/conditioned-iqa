@@ -358,7 +358,7 @@ def main() -> None:
         for epoch in range(args.epochs):
             losses = []
             for batch in train_loader:
-                print(f"epoch {epoch} batch {len(losses)} of {len(train_loader)}; device: {device}", flush=True)
+                # print(f"epoch {epoch} batch {len(losses)} of {len(train_loader)}; device: {device}", flush=True)
                 features = embed(backbone, batch["image"].to(device))
                 loss = loss_fn(head(features), batch["target"].to(device))
                 optimizer.zero_grad()

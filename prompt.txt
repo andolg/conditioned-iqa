@@ -1,0 +1,7 @@
+i want to try extracting features from non-last layers of the classifier and see if it is better than using the classifier output as conditioning input.
+
+add a couple new runs extracting features from non-last layers of the classifier, based on a new parameter in config. keep the old classifier-output conditioning as default behaviour if the new parameter is not specified, for compatibility. do this with the deep head and embedding. keep concat for these. use frozen classifier for now.
+
+do we have a deep head and embedding run with frozen classifier? if not, add this one too. 
+
+will this require changing eval script? if so, will changing it right now affect the currently eval that is currently running? if it will, postpone it, and cnhage just the train side 

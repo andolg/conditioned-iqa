@@ -8,8 +8,15 @@ import torch
 import yaml
 from torch.utils.data import DataLoader
 
-from models.dist_classifier.dataset import KADIDDistortionDataset, split_kadid
+from models.dist_classifier.dataset import DistortionDataset, split_by_reference
 from models.dist_classifier.model import DistortionClassifier
+
+# From prepare_data.py
+GROUPS = (
+    "compression", "generative", "blur", "noise",
+    "color", "tone", "spatial", "authentic",
+)
+CLASS_NAMES = GROUPS
 
 
 def run_epoch(model, loader, criterion, device, optimizer=None):
@@ -53,14 +60,15 @@ def main():
         else requested_device
     )
 
-    train_rows, val_rows = split_kadid(
+    train_rows, val_rows = split_by_reference(
         config["data"], config["val_fraction"], seed
     )
-    train_set = KADIDDistortionDataset(
-        train_rows, config.get("image_size"), train=True
+    group_to_label = {group: index for index, group in enumerate(GROUPS)}
+    train_set = DistortionDataset(
+        train_rows, group_to_label, config.get("image_size"), train=True
     )
-    val_set = KADIDDistortionDataset(
-        val_rows, config.get("image_size"), train=False
+    val_set = DistortionDataset(
+        val_rows, group_to_label, config.get("image_size"), train=False
     )
     train_loader = DataLoader(
         train_set,
@@ -76,10 +84,12 @@ def main():
         pin_memory=device.type == "cuda",
     )
 
-    num_classes = config["num_classes"]
+    num_classes = len(CLASS_NAMES)
     model = DistortionClassifier(num_classes, config["pretrained"]).to(device)
     counts = torch.bincount(torch.tensor(train_set.labels), minlength=num_classes)
-    class_weights = len(train_set) / (num_classes * counts)
+    class_weights = torch.zeros(num_classes)
+    present = counts > 0
+    class_weights[present] = len(train_set) / (num_classes * counts[present])
     criterion = torch.nn.CrossEntropyLoss(weight=class_weights.to(device))
     optimizer = torch.optim.AdamW(
         model.parameters(), lr=config["lr"], weight_decay=config["weight_decay"]
@@ -87,7 +97,7 @@ def main():
 
     tracking_uri = Path(config["mlflow_tracking_uri"]).expanduser().resolve().as_uri()
     mlflow.set_tracking_uri(tracking_uri)
-    mlflow.set_experiment(config["mlflow_experiment"])
+    mlflow.set_experiment(config["exp_name"])
 
     with mlflow.start_run(run_name=config["run_name"]) as run:
         checkpoint_dir = Path("weights") / config["exp_name"] / config["run_name"]
@@ -98,6 +108,7 @@ def main():
             "device_used": str(device),
             "train_size": len(train_set),
             "val_size": len(val_set),
+            "classes": ",".join(CLASS_NAMES),
         })
 
         best_accuracy = -1.0
@@ -126,6 +137,7 @@ def main():
                 "model": model.state_dict(),
                 "optimizer": optimizer.state_dict(),
                 "config": config,
+                "classes": CLASS_NAMES,
             }
             torch.save(checkpoint, checkpoint_dir / "last.pt")
             if val_accuracy > best_accuracy:

@@ -1,0 +1,5 @@
+run_name: zero-labels-emb32-deep-concat-kadid
+training_mode: hard
+zero_labels: true
+cls_emb_size: 32
+hidden_dim: [256, 256]

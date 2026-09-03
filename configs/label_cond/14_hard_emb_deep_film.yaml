@@ -1,0 +1,6 @@
+run_name: hard-labels-emb32-deep-film-kadid
+training_mode: hard
+classifier_labels: hard
+cls_emb_size: 32
+hidden_dim: [256, 256]
+fusion: film

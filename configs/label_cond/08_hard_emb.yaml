@@ -1,0 +1,4 @@
+run_name: hard-labels-emb32-concat-kadid
+training_mode: hard
+classifier_labels: hard
+cls_emb_size: 32

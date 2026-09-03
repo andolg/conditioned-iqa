@@ -1,0 +1,4 @@
+run_name: joint-untrained-soft-concat-kadid
+training_mode: joint
+classifier_labels: soft
+classifier_checkpoint: null

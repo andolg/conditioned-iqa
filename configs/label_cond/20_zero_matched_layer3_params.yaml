@@ -1,0 +1,6 @@
+run_name: zero-labels-matched-layer3-params-concat-kadid
+training_mode: hard
+zero_labels: true
+cls_emb_size: null
+hidden_dim: [1716, 5900]
+fusion: concat
