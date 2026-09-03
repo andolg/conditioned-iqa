@@ -46,11 +46,16 @@ class IQADataset(Dataset):
         image_size: int = 224,
         backbone: str = "clip",
         score_column: str = "scaled_subjective_score",
+        arniqa: bool = False,
+        arniqa_crop_size: int = 224,
     ):
         self.rows = csv.reset_index(drop=True) if isinstance(csv, pd.DataFrame) \
             else pd.read_csv(Path(csv).expanduser())
         self.image_size = image_size
         self.score_column = score_column
+        self.arniqa = arniqa
+        self.arniqa_crop_size = arniqa_crop_size
+        self._arniqa_condition_indices: np.ndarray | None = None
         mean, std = STATS[backbone]
         self.mean = torch.tensor(mean).view(3, 1, 1)
         self.std = torch.tensor(std).view(3, 1, 1)
@@ -63,20 +68,87 @@ class IQADataset(Dataset):
 
         row = self.rows.iloc[index]
         image = Image.open(row["path"]).convert("RGB")
-        image = image.resize((self.image_size,) * 2, Image.Resampling.BICUBIC)
-        pixels = torch.from_numpy(np.asarray(image, dtype=np.float32) / 255.0).permute(2, 0, 1)
-        return {
+        clip_image = image.resize((self.image_size,) * 2, Image.Resampling.BICUBIC)
+        pixels = torch.from_numpy(np.asarray(clip_image, dtype=np.float32) / 255.0).permute(2, 0, 1)
+        group = row.get("group", "")
+        sample = {
             "image": (pixels - self.mean) / self.std,
             "target": torch.tensor(float(row[self.score_column]), dtype=torch.float32),
             "reference": str(row["reference"]),
             "dataset": str(row.get("dataset", "")),
             "distortion": str(row.get("distortion", "")),
             "level": int(row["level"]) if pd.notna(row.get("level")) else -1,
+            # Keep missing groups as an empty string. The label-conditioned
+            # model maps this to its explicit <unknown> embedding; returning
+            # NaN would make PyTorch's default batch collation fail.
+            "group": str(group).strip().lower() if pd.notna(group) else "",
         }
+        if self.arniqa:
+            condition_index = (
+                index if self._arniqa_condition_indices is None
+                else int(self._arniqa_condition_indices[index])
+            )
+            if condition_index == index:
+                condition_image = image
+            else:
+                condition_path = self.rows.iloc[condition_index]["path"]
+                condition_image = Image.open(condition_path).convert("RGB")
+            full, half = self._arniqa_views(condition_image)
+            sample["arniqa_image"] = full
+            sample["arniqa_image_ds"] = half
+        return sample
+
+    def _arniqa_views(self, image):
+        """ImageNet-normalized center/corner crops at full and half scale."""
+        from PIL import Image
+
+        width, height = image.size
+        half = image.resize(
+            (max(1, width // 2), max(1, height // 2)),
+            Image.Resampling.BILINEAR,
+        )
+        mean = torch.tensor((0.485, 0.456, 0.406)).view(3, 1, 1)
+        std = torch.tensor((0.229, 0.224, 0.225)).view(3, 1, 1)
+
+        def crops(value):
+            crop_size = self.arniqa_crop_size
+            crop_width, crop_height = value.size
+            positions = (
+                ((crop_width - crop_size) // 2, (crop_height - crop_size) // 2),
+                (0, 0),
+                (0, crop_height - crop_size),
+                (crop_width - crop_size, 0),
+                (crop_width - crop_size, crop_height - crop_size),
+            )
+            tensors = []
+            for left, top in positions:
+                # PIL pads out-of-bounds crop regions with black, matching
+                # torchvision's crop behavior used by the ARNIQA release.
+                crop = value.crop((left, top, left + crop_size, top + crop_size))
+                tensor = torch.from_numpy(
+                    np.asarray(crop, dtype=np.float32) / 255.0
+                ).permute(2, 0, 1)
+                tensors.append((tensor - mean) / std)
+            return torch.stack(tensors)
+
+        return crops(image), crops(half)
+
+    def permute_arniqa_conditions(self, seed: int = 0) -> None:
+        """Assign every row a fixed, randomly selected condition donor."""
+        if not self.arniqa:
+            raise ValueError("ARNIQA condition permutation requires arniqa=True")
+        self._arniqa_condition_indices = np.random.default_rng(seed).permutation(len(self.rows))
 
     def subset(self, rows: pd.DataFrame) -> "IQADataset":
         backbone = "clip" if float(self.mean[0]) != 0.5 else "siglip"
-        return IQADataset(rows, self.image_size, backbone, self.score_column)
+        return IQADataset(
+            rows,
+            self.image_size,
+            backbone,
+            self.score_column,
+            arniqa=self.arniqa,
+            arniqa_crop_size=self.arniqa_crop_size,
+        )
 
 
 def _blocks(rows: pd.DataFrame):

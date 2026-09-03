@@ -9,20 +9,14 @@ description = "Quick start for the summer-school project on conditioned image qu
 requires-python = ">=3.11,<3.13"
 dependencies = [
     "torch==2.13.0",
-    "torchvision",
+    "torchvision==0.28.0",
     "transformers>=4.37",
     "pandas",
     "openpyxl",  # SPAQ and CID2013 ship their labels as xlsx
     "numpy",
     "scipy",
     "pillow",
-    "mlflow>=2.10,<4",
-    "pyyaml",
-]
-
-[project.optional-dependencies]
-sheets = [
-    "gspread>=6,<7",
+    "tqdm",
 ]
 
 [tool.uv.sources]
@@ -36,9 +30,12 @@ explicit = true
 
 [tool.setuptools]
 py-modules = [
+    "arniqa",
     "dataset",
     "download_data",
     "download_data_mirrors",
+    "evaluate",
+    "evaluate_arniqa",
     "hf_mirror_utils",
     "prepare_data",
     "train",
