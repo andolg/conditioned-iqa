@@ -25,7 +25,7 @@ Evaluation must avoid content leakage. Images derived from the same pristine ref
 
 We use the image-only model from the original project repository as the common baseline for all conditioning approaches. An input image is converted to RGB, resized with bicubic interpolation to the spatial resolution required by the selected CLIP model, and normalized using the CLIP channel statistics. It is then passed through a pretrained CLIP vision transformer. The encoder is kept in evaluation mode and all of its parameters are frozen, so only the quality-prediction head is optimized. The baseline uses the pooled global representation produced by CLIP rather than its individual patch tokens.
 
-The quality head consists of layer normalization, a linear projection to 256 hidden units, a GELU activation, dropout with probability 0.1, and a final linear layer that outputs one scalar. For a pooled image embedding $z \in \mathbb{R}^{d}$, the prediction can be written as
+The quality head consists of layer normalization, a linear projection to 256 hidden units, a GELU activation, dropout with probability 0.1, and a final linear layer that outputs one scalar. For a pooled image embedding $z \in \mathbf{R}^{d}$, the prediction can be written as
 \[
 \hat{y} = W_2\,\mathrm{Dropout}\!\left(\mathrm{GELU}\!\left(W_1\mathrm{LayerNorm}(z)+b_1\right)\right)+b_2.
 \]
@@ -37,6 +37,7 @@ We evaluate the baseline and conditioned models with two CLIP encoder sizes. CLI
 \centering
 \small
 \setlength{\tabcolsep}{5pt}
+\resizebox{\textwidth}{!}{%
 \begin{tabular}{lcccc}
 \hline
 Encoder & Vision architecture & Input size & Embedding size & Trainable head parameters \\
@@ -45,6 +46,7 @@ CLIP-Base & ViT-B/16 & $224\times224$ & 768 & 198,657 \\
 CLIP-Large & ViT-L/14 & $336\times336$ & 1024 & 264,705 \\
 \hline
 \end{tabular}
+}
 \caption{Backbone variants used in the experiments. In both cases only the regression head is trainable.}
 \label{tab:backbones}
 \end{table}
@@ -57,6 +59,7 @@ We follow the data protocol proposed with the original task and separate dataset
 \centering
 \small
 \setlength{\tabcolsep}{4pt}
+\resizebox{\textwidth}{!}{%
 \begin{tabular}{p{2.3cm}rp{3.2cm}p{5.0cm}}
 \hline
 Dataset & Images & Condition groups & Purpose \\
@@ -68,6 +71,7 @@ PIPAL & 24,200 & primarily generative & Restoration, super-resolution, denoising
 AIGCIQA2023 & 2,400 & generative & AI-generated images; generation prompts are used as data-splitting keys. \\
 \hline
 \end{tabular}
+}
 \caption{Datasets available for training and in-domain validation.}
 \label{tab:training-datasets}
 \end{table}
@@ -78,6 +82,7 @@ The evaluation-only datasets are not used to train the model, choose hyperparame
 \centering
 \small
 \setlength{\tabcolsep}{4pt}
+\resizebox{\textwidth}{!}{%
 \begin{tabular}{p{2.3cm}rp{3.2cm}p{5.0cm}}
 \hline
 Dataset & Images & Condition groups & Evaluation role \\
@@ -91,6 +96,7 @@ AGIQA-3K & 2,982 & generative & Transfer across six image generators. \\
 UHD-IQA & 6,073 & authentic & Evaluation on high-resolution photographs with relatively subtle quality differences. \\
 \hline
 \end{tabular}
+}
 \caption{Datasets reserved for final evaluation.}
 \label{tab:evaluation-datasets}
 \end{table}
