@@ -1,0 +1,132 @@
+\documentclass{article}
+\usepackage{graphicx} % Required for inserting images
+
+\title{Distorton-Conditioned IQA}
+\author{Sergey Muravlev, Danila Evsyukov, Andrey Dolgolenko}
+\date{September 2026}
+
+\begin{document}
+
+\maketitle
+
+\section{Task Description}
+
+Image quality assessment (IQA) aims to predict how people perceive the quality of an image. In the no-reference setting, a model must estimate this quality without access to a pristine reference image. A conventional no-reference metric receives only the distorted image, even though the relationship between visible image features and perceived quality may depend on the kind of degradation present. For example, blur, noise, and compression produce different artefacts and may therefore require different interpretations of the same visual representation.
+
+The goal of this project is to determine whether an IQA model agrees more closely with human judgements when it is additionally told which broad family of distortion it is observing. The condition is a coarse distortion group rather than a dataset-specific distortion label. The groups used in the project are blur, noise, compression, colour, tone, spatial, generative, and authentic. The authentic group represents photographs that were not degraded artificially. This shared vocabulary makes it possible to use a consistent condition across datasets whose original distortion annotations differ.
+
+The principal comparison is between an image-only baseline and a conditioned model built on the same frozen visual representation. Both models predict a continuous subjective quality score, scaled to the interval $[0,1]$, where a higher value denotes better quality. Performance is measured by the agreement between predicted and human scores using Spearman's rank correlation coefficient (SRCC) and Pearson's linear correlation coefficient (PLCC). The study also includes shuffled, deliberately incorrect, zeroed, and permuted-training conditions. These controls are needed to distinguish a gain caused by useful distortion information from one caused merely by additional model parameters or correlations specific to a dataset.
+
+Evaluation must avoid content leakage. Images derived from the same pristine reference are kept entirely in either the training or validation split, since placing different distortions of the same source image on both sides can allow the model to recognise image content instead of learning image quality. When multiple datasets are used, results are examined per dataset and sampling is balanced so that the largest dataset does not dominate the experiment. In addition to predictive correlations, the comparison records model size, computational cost, inference latency, throughput, and peak GPU memory. The resulting task is therefore not only to maximize correlation with human opinion, but to establish through controlled experiments whether conditioning on distortion families provides a genuine and practically useful improvement over image-only IQA.
+
+\section{Experimental Setup}
+
+\subsection{Baseline Architecture}
+
+We use the image-only model from the original project repository as the common baseline for all conditioning approaches. An input image is converted to RGB, resized with bicubic interpolation to the spatial resolution required by the selected CLIP model, and normalized using the CLIP channel statistics. It is then passed through a pretrained CLIP vision transformer. The encoder is kept in evaluation mode and all of its parameters are frozen, so only the quality-prediction head is optimized. The baseline uses the pooled global representation produced by CLIP rather than its individual patch tokens.
+
+The quality head consists of layer normalization, a linear projection to 256 hidden units, a GELU activation, dropout with probability 0.1, and a final linear layer that outputs one scalar. For a pooled image embedding $z \in \mathbb{R}^{d}$, the prediction can be written as
+\[
+\hat{y} = W_2\,\mathrm{Dropout}\!\left(\mathrm{GELU}\!\left(W_1\mathrm{LayerNorm}(z)+b_1\right)\right)+b_2.
+\]
+No output activation is applied; the head directly regresses the normalized subjective quality score. This deliberately simple architecture provides a stable reference against which the contribution of each conditioning mechanism can be measured.
+
+We evaluate the baseline and conditioned models with two CLIP encoder sizes. CLIP-Base uses the ViT-B/16 architecture at $224\times224$ pixels and produces a 768-dimensional pooled embedding. CLIP-Large uses ViT-L/14 at $336\times336$ pixels and produces a 1024-dimensional embedding. The resulting baseline heads contain 198,657 and 264,705 trainable parameters, respectively; the substantially larger vision encoders remain frozen in both cases.
+
+\begin{table}[htbp]
+\centering
+\small
+\setlength{\tabcolsep}{5pt}
+\begin{tabular}{lcccc}
+\hline
+Encoder & Vision architecture & Input size & Embedding size & Trainable head parameters \\
+\hline
+CLIP-Base & ViT-B/16 & $224\times224$ & 768 & 198,657 \\
+CLIP-Large & ViT-L/14 & $336\times336$ & 1024 & 264,705 \\
+\hline
+\end{tabular}
+\caption{Backbone variants used in the experiments. In both cases only the regression head is trainable.}
+\label{tab:backbones}
+\end{table}
+
+\subsection{Datasets}
+
+We follow the data protocol proposed with the original task and separate datasets used for training and validation from datasets reserved for final zero-shot evaluation. The training collection covers synthetic distortions, authentic photographs, restoration artefacts, generated images, and face photographs. This diversity is important because the conditioning variable is intended to describe a distortion family rather than identify a particular corpus. GFIQA-20k is screened for near-duplicates of KonIQ-10k before training, and the separate PIPAL validation class is excluded from the PIPAL training split.
+
+\begin{table}[htbp]
+\centering
+\small
+\setlength{\tabcolsep}{4pt}
+\begin{tabular}{p{2.3cm}rp{3.2cm}p{5.0cm}}
+\hline
+Dataset & Images & Condition groups & Purpose \\
+\hline
+KADID-10k & 10,125 & blur, noise, compression, colour, tone, spatial & Controlled synthetic distortions: 81 references, 25 distortion types, and 5 severity levels. \\
+SPAQ & 11,125 & authentic & In-the-wild smartphone photographs and a constant-condition control. \\
+GFIQA-20k & 19,998 & authentic & Authentic face photographs, extending the content domain beyond general scenes. \\
+PIPAL & 24,200 & primarily generative & Restoration, super-resolution, denoising, and GAN artefacts; 17,800 rows have the generative group label. \\
+AIGCIQA2023 & 2,400 & generative & AI-generated images; generation prompts are used as data-splitting keys. \\
+\hline
+\end{tabular}
+\caption{Datasets available for training and in-domain validation.}
+\label{tab:training-datasets}
+\end{table}
+
+The evaluation-only datasets are not used to train the model, choose hyperparameters, or select an architecture. They test whether improvements transfer to new datasets, distortion vocabularies, image domains, and acquisition pipelines.
+
+\begin{table}[htbp]
+\centering
+\small
+\setlength{\tabcolsep}{4pt}
+\begin{tabular}{p{2.3cm}rp{3.2cm}p{5.0cm}}
+\hline
+Dataset & Images & Condition groups & Evaluation role \\
+\hline
+TID2013 & 3,000 & six synthetic groups & Transfer to a new taxonomy containing 24 distortion types. \\
+CSIQ & 866 & blur, noise, compression, tone & Transfer to synthetic distortions from another laboratory. \\
+CID2013 & 474 & authentic & Generalization to an unseen authentic-image dataset. \\
+KonIQ-10k & 10,073 & authentic & Near-domain evaluation on authentic photographs. \\
+CLIVE & 1,162 & authentic & Cross-dataset evaluation on real-world mobile photographs. \\
+AGIQA-3K & 2,982 & generative & Transfer across six image generators. \\
+UHD-IQA & 6,073 & authentic & Evaluation on high-resolution photographs with relatively subtle quality differences. \\
+\hline
+\end{tabular}
+\caption{Datasets reserved for final evaluation.}
+\label{tab:evaluation-datasets}
+\end{table}
+
+All releases are converted to a common table containing the image path, original subjective score, normalized score, dataset, reference, distortion type, severity level, and distortion group. Scores are min--max normalized separately for each dataset to $[0,1]$, with larger values always denoting better quality; consequently, datasets that publish DMOS in the opposite direction are inverted during preparation. The original scores are retained for traceability.
+
+\subsection{Training Protocol}
+
+Unless a later experiment section states otherwise, we use the hyperparameters of the reference baseline. The regression head is trained for five epochs with batches of 32 images. Optimization uses AdamW with a learning rate of $10^{-3}$ and the Smooth L1 loss with $\beta=0.1$. The hidden width is 256, dropout is 0.1, and random seeds for Python, NumPy, and PyTorch are fixed to 0. For a single dataset, training examples are randomly shuffled; for a joint training table, inverse-frequency sampling by dataset gives each corpus equal expected influence regardless of its size.
+
+\begin{table}[htbp]
+\centering
+\small
+\begin{tabular}{ll}
+\hline
+Parameter & Reference value \\
+\hline
+Epochs & 5 \\
+Batch size & 32 \\
+Optimizer & AdamW \\
+Learning rate & $10^{-3}$ \\
+Loss & Smooth L1, $\beta=0.1$ \\
+Hidden width & 256 \\
+Dropout & 0.1 \\
+Validation fraction & 20\% \\
+Default seed & 0 \\
+\hline
+\end{tabular}
+\caption{Reference training configuration.}
+\label{tab:training-parameters}
+\end{table}
+
+Within each training dataset, 20\% of the data is held out for validation. Synthetic datasets are split by pristine reference, ensuring that every distorted version of a source image remains on the same side of the split. Generated-image datasets are grouped by prompt where prompt metadata is available, while authentic datasets without shared references are split by image. The held-out share is drawn separately from every dataset in a joint training collection so that each corpus is represented in validation.
+
+\subsection{Evaluation Protocol}
+
+We report SRCC and PLCC separately for every dataset. For multi-dataset experiments, macro SRCC and macro PLCC are computed by averaging the per-dataset correlations rather than pooling samples whose subjective scales and contents are not directly comparable; the worst per-dataset SRCC is also recorded. PIPAL is additionally evaluated using mean within-reference SRCC because its Elo scores rank restorations of the same source image and do not define an absolute ordering across different references. Conditioned models are compared with an independently trained image-only baseline under the same backbone, data split, and optimization settings. The intervention tests with wrong, shuffled, zeroed, and training-permuted conditions are reported in the corresponding experiment sections.
+
+\end{document}
