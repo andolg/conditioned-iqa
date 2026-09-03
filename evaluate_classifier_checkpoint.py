@@ -40,6 +40,7 @@ def main() -> None:
             dataset = EvaluationDataset(
                 csv_path, image_size, family, source["score_column"], classifier is not None
             )
+            dataset.name = Path(csv_path).parent.name
             loader = DataLoader(
                 dataset,
                 batch_size=args.batch_size,
