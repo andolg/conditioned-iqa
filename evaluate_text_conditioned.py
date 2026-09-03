@@ -19,9 +19,9 @@ from result_reporting import (
     size_megabytes,
 )
 from text_conditioning.data import ConditionedIQADataset
-from text_conditioning.models import ResidualTextHead, TextFusionHead
+from text_conditioning.models import AdapterTextFusionHead, DatasetScaleHead, GlobalPatchResidualHead, GlobalTextCrossAttentionHead, GlobalTextPatchResidualHead, MDTVSFAHead, MultiViewQualityHead, MultiViewTextFusionHead, MultiViewUniformTextFusionHead, PatchWeightedHead, ResidualTextHead, TextFusionHead, TextPatchWeightedHead, FiLMTextHead
 from text_conditioning.text_encoder import load_frozen_text_encoder
-from train import BACKBONES, QualityMLP, embed, load_backbone
+from train import BACKBONES, QualityMLP, embed, embed_patches, load_backbone
 from train_text_conditioned import PromptBank, evaluate
 
 
@@ -33,11 +33,32 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--backbone", choices=sorted(BACKBONES), default=None)
     parser.add_argument("--weights", default=None)
     parser.add_argument("--text-weights", default=None)
-    parser.add_argument("--method", choices=("baseline", "concat", "interaction", "residual"), default=None)
+    parser.add_argument("--text-encoder-id", default=None)
+    parser.add_argument("--method", choices=("baseline", "concat", "interaction", "residual", "film", "patch_weighted", "patch_interaction", "global_patch_residual", "global_text_patch_residual", "global_text_cross_attention", "multiview_baseline", "multiview_interaction", "multiview_uniform_interaction", "adapter_interaction"), default=None)
+    parser.add_argument(
+        "--dataset-objective", choices=("global", "mdtvsfa", "mdtvsfa_faithful"), default=None
+    )
+    parser.add_argument("--calibration-datasets", nargs="+", default=None)
     parser.add_argument("--hidden-dim", type=int, default=None)
     parser.add_argument("--fusion-dim", type=int, default=None)
+    parser.add_argument("--mlp-layers", type=int, default=None)
     parser.add_argument("--epochs", type=int, default=None)
     parser.add_argument("--score-column", default="scaled_subjective_score")
+    parser.add_argument(
+        "--preprocessing", choices=("stretch", "resize_center_crop", "multiscale"), default=None,
+        help="image preprocessing; defaults to the source run's setting",
+    )
+    parser.add_argument(
+        "--path-parent", default=None,
+        help="evaluate only rows whose image path's immediate parent has this name",
+    )
+    parser.add_argument("--include-groups", nargs="+", default=None,
+                        help="evaluate only these broad condition groups (E8)")
+    parser.add_argument(
+        "--condition-mode", choices=("correct", "zero", "generic", "wrong", "heldout"),
+        default="correct", help="prompt intervention used during held-out scoring",
+    )
+    parser.add_argument("--paraphrase-index", type=int, default=0)
     parser.add_argument("--batch-size", type=int, default=32)
     parser.add_argument("--workers", type=int, default=2)
     parser.add_argument("--device", default="auto")
@@ -89,17 +110,50 @@ def parse_args() -> tuple[argparse.Namespace, Path, str]:
         defaults.pop(key, None)
     valid = {action.dest for action in parser._actions}
     parser.set_defaults(**{key: value for key, value in defaults.items() if key in valid})
-    return parser.parse_args(), checkpoint_path, source_name
+    args = parser.parse_args()
+    # Source manifests created before this option existed use the historical
+    # stretch transform, so they remain evaluable and reproducible.
+    args.preprocessing = args.preprocessing or "stretch"
+    return args, checkpoint_path, source_name
 
 
 def build_head(args, vision_dim: int, text_dim: int | None, device: torch.device):
-    if args.method == "baseline":
-        return QualityMLP(vision_dim, args.hidden_dim).to(device)
-    if args.method == "residual":
-        return ResidualTextHead(vision_dim, text_dim, args.fusion_dim, args.hidden_dim).to(device)
-    return TextFusionHead(
-        vision_dim, text_dim, args.fusion_dim, args.hidden_dim, args.method == "interaction"
-    ).to(device)
+    if args.method in {"baseline", "multiview_baseline"}:
+        head = (MultiViewQualityHead(vision_dim, args.fusion_dim, args.hidden_dim).to(device)
+                if args.method == "multiview_baseline" else
+                QualityMLP(vision_dim, args.hidden_dim, mlp_layers=args.mlp_layers or 1).to(device))
+    elif args.method == "patch_weighted":
+        head = PatchWeightedHead(vision_dim, args.hidden_dim).to(device)
+    elif args.method == "patch_interaction":
+        head = TextPatchWeightedHead(vision_dim, text_dim, args.fusion_dim, args.hidden_dim).to(device)
+    elif args.method == "multiview_interaction":
+        head = MultiViewTextFusionHead(vision_dim, text_dim, args.fusion_dim, args.hidden_dim).to(device)
+    elif args.method == "multiview_uniform_interaction":
+        head = MultiViewUniformTextFusionHead(vision_dim, text_dim, args.fusion_dim, args.hidden_dim).to(device)
+    elif args.method == "adapter_interaction":
+        head = AdapterTextFusionHead(vision_dim, text_dim, args.fusion_dim, args.hidden_dim, mlp_layers=args.mlp_layers or 1).to(device)
+    elif args.method == "film":
+        head = FiLMTextHead(vision_dim, text_dim, args.fusion_dim, args.hidden_dim).to(device)
+    elif args.method == "global_patch_residual":
+        head = GlobalPatchResidualHead(vision_dim, args.hidden_dim).to(device)
+    elif args.method == "global_text_patch_residual":
+        head = GlobalTextPatchResidualHead(vision_dim, text_dim, args.fusion_dim, args.hidden_dim).to(device)
+    elif args.method == "global_text_cross_attention":
+        head = GlobalTextCrossAttentionHead(vision_dim, text_dim, args.fusion_dim, args.hidden_dim).to(device)
+    elif args.method == "residual":
+        head = ResidualTextHead(vision_dim, text_dim, args.fusion_dim, args.hidden_dim).to(device)
+    else:
+        head = TextFusionHead(
+            vision_dim, text_dim, args.fusion_dim, args.hidden_dim,
+            args.method == "interaction", mlp_layers=args.mlp_layers or 1,
+        ).to(device)
+    if args.dataset_objective == "mdtvsfa":
+        names = args.calibration_datasets or [f"calibration_{index}" for index in range(4)]
+        head = DatasetScaleHead(head, names).to(device)
+    elif args.dataset_objective == "mdtvsfa_faithful":
+        names = args.calibration_datasets or [f"calibration_{index}" for index in range(4)]
+        head = MDTVSFAHead(head, names).to(device)
+    return head
 
 
 def safe_args(args) -> dict:
@@ -129,10 +183,11 @@ def main() -> None:
     backbone, image_size, vision_dim = load_backbone(args.backbone, args.weights, device)
     prompts = None
     text_dim = None
-    if args.method != "baseline":
-        model_id = BACKBONES[args.backbone][0]
+    if args.method not in {"baseline", "multiview_baseline", "patch_weighted", "global_patch_residual"}:
+        model_id = args.text_encoder_id or BACKBONES[args.backbone][0]
+        text_weights = args.text_weights or (None if args.text_encoder_id else args.weights)
         tokenizer, text_encoder, text_dim = load_frozen_text_encoder(
-            model_id, args.text_weights or args.weights, device
+            model_id, text_weights, device, native=args.text_encoder_id is None
         )
         prompts = PromptBank(tokenizer, text_encoder, device)
         del text_encoder
@@ -143,23 +198,50 @@ def main() -> None:
     head.load_state_dict(checkpoint["head"])
     head.eval()
     def forward_once():
-        features = embed(backbone, torch.randn(1, 3, image_size, image_size, device=device))
-        if args.method == "baseline":
+        images = torch.randn((5, 3, image_size, image_size), device=device) if args.method in {"multiview_baseline", "multiview_interaction", "multiview_uniform_interaction"} else torch.randn(1, 3, image_size, image_size, device=device)
+        if args.method in {"multiview_baseline", "multiview_interaction", "multiview_uniform_interaction"}:
+            features = embed(backbone, images).unsqueeze(0)
+        else:
+            features = (embed(backbone, images), embed_patches(backbone, images)) if args.method in {"global_patch_residual", "global_text_patch_residual", "global_text_cross_attention"} else (embed_patches(backbone, images) if args.method in {"patch_weighted", "patch_interaction"} else embed(backbone, images))
+        if args.method in {"baseline", "multiview_baseline", "patch_weighted", "global_patch_residual"}:
             return head(features)
         return head(features, torch.randn(1, text_dim, device=device))
 
-    latency_p50_ms, latency_p95_ms, peak_memory_mb = measure_latency_memory(
-        forward_once, device
-    )
+    try:
+        latency_p50_ms, latency_p95_ms, peak_memory_mb = measure_latency_memory(
+            forward_once, device
+        )
+    except RuntimeError as error:
+        # Throughput reporting is auxiliary.  A CUDA-event failure must not
+        # discard a completed held-out metric evaluation.
+        print(f"latency measurement failed; continuing without latency metrics: {error}", file=sys.stderr)
+        latency_p50_ms = latency_p95_ms = peak_memory_mb = float("nan")
     flops = measure_flops(forward_once)
     rows = []
     for data_path in args.data:
         family = "siglip" if args.backbone.startswith("siglip") else "clip"
         dataset = ConditionedIQADataset(
-            data_path, image_size=image_size, backbone=family, score_column=args.score_column
+            data_path, image_size=image_size, backbone=family, score_column=args.score_column,
+            preprocessing=args.preprocessing,
         )
+        if args.path_parent:
+            subset_rows = dataset.rows[dataset.rows["path"].map(
+                lambda path: Path(path).parent.name == args.path_parent
+            )]
+            if subset_rows.empty:
+                raise ValueError(f"no rows in {data_path} have parent directory {args.path_parent!r}")
+            dataset = dataset.subset(subset_rows)
+        if args.include_groups:
+            groups = dataset.rows["group"].fillna("authentic").astype(str).replace({"color": "colour"})
+            selected = dataset.rows[groups.isin(set(args.include_groups))]
+            if selected.empty:
+                raise ValueError(f"no rows in {data_path} match groups {args.include_groups}")
+            dataset = dataset.subset(selected)
         loader = DataLoader(dataset, batch_size=args.batch_size, num_workers=args.workers)
-        scores = evaluate(backbone, head, loader, device, prompts)
+        scores = evaluate(
+            backbone, head, loader, device, prompts,
+            mode=args.condition_mode, paraphrase_index=args.paraphrase_index,
+        )
         images_per_second = scores["images"] / scores["elapsed_seconds"]
         for dataset_name, value in scores["per_dataset"].items():
             rows.append({

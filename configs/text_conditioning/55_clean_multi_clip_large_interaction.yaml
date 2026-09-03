@@ -1,0 +1,24 @@
+# Current best protocol, changing only the frozen vision/text backbone.
+data: /home/sergey/conditioned-iqa/data/multi_train_clean/labels.csv
+backbone: clip-large
+weights: /home/sergey/.cache/huggingface/hub/models--openai--clip-vit-large-patch14-336/snapshots/ce19dc912ca5cd21c8a653c79e251e808ccabcd1
+text_weights: /home/sergey/.cache/huggingface/hub/models--openai--clip-vit-large-patch14-336/snapshots/ce19dc912ca5cd21c8a653c79e251e808ccabcd1
+method: interaction
+preprocessing: stretch
+epochs: 5
+batch_size: 32
+lr: 0.001
+hidden_dim: 256
+fusion_dim: 256
+split: reference
+sampler: by_dataset
+workers: 4
+cache_features: true
+feature_cache_dir: runs/feature_cache_clip_large_clean
+device: cuda:1
+seed: 0
+mlflow: true
+mlflow_tracking_uri: sqlite:///mlflow.db
+mlflow_experiment: conditioned-iqa-performance
+mlflow_run_name: best-config-clip-large-clean-interaction-s0
+config_dir: runs/configs

@@ -1,0 +1,29 @@
+# H2.1: frozen CLIP-B/16 patch score-and-weight aggregation, image-only.
+# Each of 196 patch tokens predicts a local quality and a softmax-normalized
+# importance; the final score is their weighted mean.  This isolates spatial
+# aggregation before introducing text-conditioned patch selection.
+data: /home/sergey/conditioned-iqa/data/multi_train_clean/labels.csv
+backbone: clip-base
+weights: /home/sergey/.cache/huggingface/hub/models--openai--clip-vit-base-patch16/snapshots/57c216476eefef5ab752ec549e440a49ae4ae5f3
+method: patch_weighted
+preprocessing: stretch
+dataset_objective: mdtvsfa
+dataset_loss_weighting: mean
+ranking_weight: 0.05
+ranking_scope: dataset
+calibration_datasets: [aigciqa2023, kadid10k, spaq]
+epochs: 5
+batch_size: 32
+lr: 0.001
+hidden_dim: 256
+split: reference
+sampler: by_dataset
+workers: 4
+cache_features: true
+device: cuda:2
+seed: 0
+mlflow: true
+mlflow_tracking_uri: sqlite:///mlflow.db
+mlflow_experiment: conditioned-iqa-head-architecture
+mlflow_run_name: patch-weighted-image-only-m1-s0
+config_dir: runs/configs

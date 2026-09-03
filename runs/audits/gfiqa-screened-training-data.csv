@@ -1,0 +1,5 @@
+dataset,images,references,missing_images,duplicate_paths,original_min,original_p05,original_median,original_p95,original_max,scaled_min,scaled_max,groups
+aigciqa2023,2400,100,0,0,0.266272850651459,0.3570122653182203,0.5075346775059265,0.6429694116286039,0.7211039791344049,0.0,1.0,generative
+gfiqa20k,19763,19763,0,0,0.0046776437847866,0.21910885205425962,0.5266480329896199,0.8100204650784086,0.941316750328164,0.0,1.0,authentic
+kadid10k,10125,81,0,0,1.0,1.33,3.0,4.6,4.93,0.0,1.0,"blur, color, compression, noise, spatial, tone"
+spaq,11125,11125,0,0,2.0,17.71,50.2,81.67,96.0,0.0,1.0,authentic

@@ -1,0 +1,27 @@
+# H2.3: preserve the pooled global scorer and let spatial patch aggregation
+# make a gated correction, rather than replacing the global representation.
+data: /home/sergey/conditioned-iqa/data/multi_train_clean/labels.csv
+backbone: clip-base
+weights: /home/sergey/.cache/huggingface/hub/models--openai--clip-vit-base-patch16/snapshots/57c216476eefef5ab752ec549e440a49ae4ae5f3
+method: global_patch_residual
+preprocessing: stretch
+dataset_objective: mdtvsfa
+dataset_loss_weighting: mean
+ranking_weight: 0.05
+ranking_scope: dataset
+calibration_datasets: [aigciqa2023, kadid10k, spaq]
+epochs: 5
+batch_size: 32
+lr: 0.001
+hidden_dim: 256
+split: reference
+sampler: by_dataset
+workers: 4
+cache_features: true
+device: cuda:2
+seed: 0
+mlflow: true
+mlflow_tracking_uri: sqlite:///mlflow.db
+mlflow_experiment: conditioned-iqa-head-architecture
+mlflow_run_name: global-patch-residual-m1-s0
+config_dir: runs/configs

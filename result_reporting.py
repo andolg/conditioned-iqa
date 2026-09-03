@@ -107,12 +107,17 @@ def measure_latency_memory(
     samples: list[float] = []
     for _ in range(repeats):
         if use_cuda:
+            # ``device`` need not be the process's current CUDA device (the
+            # experiment runner intentionally places jobs on different GPUs).
+            # Recording on the current stream of the requested device avoids
+            # cross-device events that can remain incomplete at elapsed_time.
+            stream = torch.cuda.current_stream(device)
             start = torch.cuda.Event(enable_timing=True)
             end = torch.cuda.Event(enable_timing=True)
-            start.record()
+            start.record(stream)
             forward()
-            end.record()
-            torch.cuda.synchronize(device)
+            end.record(stream)
+            stream.synchronize()
             samples.append(start.elapsed_time(end))
         else:
             start = time.perf_counter()

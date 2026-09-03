@@ -1,0 +1,30 @@
+# D1: screened GFIQA expansion, conditioned depth-2 finalist.
+data: /home/sergey/conditioned-iqa/data/multi_train_clean_gfiqa_screened/labels.csv
+backbone: clip-base
+weights: /home/sergey/.cache/huggingface/hub/models--openai--clip-vit-base-patch16/snapshots/57c216476eefef5ab752ec549e440a49ae4ae5f3
+text_weights: /home/sergey/.cache/huggingface/hub/models--openai--clip-vit-base-patch16/snapshots/57c216476eefef5ab752ec549e440a49ae4ae5f3
+method: interaction
+preprocessing: stretch
+dataset_objective: mdtvsfa
+dataset_loss_weighting: mean
+ranking_weight: 0.05
+ranking_scope: dataset
+calibration_datasets: [aigciqa2023, gfiqa20k, kadid10k, spaq]
+epochs: 5
+batch_size: 32
+lr: 0.001
+hidden_dim: 256
+fusion_dim: 256
+mlp_layers: 2
+split: reference
+sampler: by_dataset
+workers: 2
+cache_features: true
+feature_cache_dir: runs/feature_cache_gfiqa_d1
+device: cuda:0
+seed: 0
+mlflow: true
+mlflow_tracking_uri: sqlite:///mlflow.db
+mlflow_experiment: conditioned-iqa-gfiqa-screened
+mlflow_run_name: gfiqa-screened-m1-interaction-depth2-s0
+config_dir: runs/configs
