@@ -139,7 +139,7 @@ Unless a section explicitly identifies an early diagnostic result, we restore th
 
 \subsection{Efficiency Measurements}
 
-Alongside correlation, we report total parameters, estimated GFLOPs, median per-image latency, throughput in images per second, and peak GPU memory from the saved experiment artifacts. Throughput and latency are hardware- and implementation-dependent and therefore support comparisons within the recorded benchmark environment rather than universal deployment guarantees. In the trade-off figures, the horizontal axis is throughput, the vertical axis is external macro SRCC, point area represents total parameters, and colour represents peak memory. A model lies on the displayed FPS--SRCC Pareto front when no other plotted model is both faster and more accurate.
+Alongside correlation, we report total parameters, estimated GFLOPs, median per-image latency, throughput in images per second, and peak GPU memory from the saved experiment artifacts. Throughput and latency are hardware- and implementation-dependent and therefore support comparisons within the recorded benchmark environment rather than universal deployment guarantees. We call a model Pareto-optimal with respect to throughput and external macro SRCC when no other measured model is both faster and more accurate.
 
 \section{Text Conditioning}
 
@@ -341,13 +341,6 @@ The five-view text model produced the strongest repeated CLIP-Base result: valid
 
 Multi-view processing helped every tested backbone. Relative to its pooled text model, validation SRCC increased by 0.0315 for CLIP-Base, 0.0207 for CLIP-Large, and 0.0286 for SigLIP-Large. The smaller validation gain for the stronger pooled backbones is consistent with less remaining headroom, although external behavior was not monotonic: external SRCC increased by 0.0348, 0.0183, and 0.0441, respectively. The KADID-10k image-only/text comparison also showed that explicit conditioning remained useful for CLIP-Large, increasing SRCC from 0.8469 to 0.8896.
 
-\begin{figure}[htbp]
-\centering
-\includegraphics[width=\textwidth]{plots/png/text_conditioning_tradeoff.png}
-\caption{Text-conditioning speed--accuracy trade-offs. Point area represents total parameters, colour represents peak GPU memory, and the dashed line is the FPS--external-SRCC Pareto front. The left panel compares pooled-head and objective ablations; the right panel compares the backbone and multi-view finalists.}
-\label{fig:text-tradeoff}
-\end{figure}
-
 The pooled CLIP-Base interaction preserves the baseline's efficiency: 333.92 images/s, 3.3 ms median latency, and 349.3 MB peak memory, compared with 308.60 images/s, 3.3 ms, and 347.4 MB for the three-dataset image-only model. Five-view processing raises accuracy at a real cost, reducing throughput to roughly 99 images/s and increasing peak memory to 408.4 MB. It nevertheless remains substantially lighter than the large backbones. The calibrated five-view CLIP-Base model obtains external SRCC 0.6612 with 86.53M parameters, 408.4 MB peak memory, and 79.93 images/s, whereas five-view CLIP-Large obtains 0.6475 with 304.37M parameters, 1382.9 MB, and 10.48 images/s. Thus CLIP-Base is about 3.5 times smaller, uses 3.4 times less peak memory, and is 7.6 times faster in this comparison. Five-view SigLIP-Large reaches the best external SRCC, 0.6699, but uses 316.88M parameters and 1304.0 MB while running at 22.68 images/s; the CLIP-Base result is only 0.0087 lower and is 3.5 times faster.
 
 Across the whole text workstream, the reported external macro SRCC rises from 0.4783 for the first KADID-only CLIP-Base baseline to 0.6612 for the final calibrated five-view CLIP-Base model. This 0.1829 end-to-end gain demonstrates the value of the complete development path, but it is not a conditioning-only effect because the training mixture, checkpoint selection, and view representation also changed. The controlled conclusions are narrower: pooled text improves over pooled image-only under the same three-dataset setup, and five-view text improves over the matched five-view image-only control. The final CLIP-Base system is slower than the original single-view baseline, but it provides a notably stronger accuracy--efficiency balance than the tested large-backbone alternatives, which makes it the most attractive configuration for high-throughput use when the distortion-group prompt is available.
@@ -390,7 +383,7 @@ The CLIP-Base residual gate is particularly attractive relative to the image-onl
 
 \subsection{Dataset-Mixture Fusion Study}
 
-We next trained the CLIP-Base label-conditioned heads on the KADID-10k, SPAQ, and AIGCIQA2023 dataset mixture. The fusion operations retain the architectural roles described above: input FiLM adapts the visual channels before regression, hidden FiLM adapts the learned quality representation, the residual gate adds a controlled correction to a complete baseline path, additive fusion shifts the visual embedding, the hypernetwork modifies the first-layer weights with a rank-4 update, and patch attention selects spatial evidence with the label as its query.
+We next trained the CLIP-Base label-conditioned heads on the KADID-10k, SPAQ, and AIGCIQA2023 dataset mixture. The fusion operations retain the architectural roles described above: input FiLM adapts the visual channels before regression, hidden FiLM adapts the learned quality representation, the residual gate adds a controlled correction to a complete baseline path, additive fusion shifts the visual embedding, and patch attention selects spatial evidence with the label as its query. Of particular interest is the rank-4 hypernetwork: instead of modifying every visual channel directly, it uses the label embedding to generate four coefficients for a low-rank update to the first regression layer. This gives each distortion group a condition-specific scoring transformation while retaining a shared low-capacity quality model.
 
 \begin{table}[htbp]
 \centering
@@ -414,14 +407,27 @@ Patch attention & 0.8245 & 0.8228 & 0.6107 & 0.6276 & 85.998M \\
 \label{tab:label-joint}
 \end{table}
 
-Input FiLM gave the best in-domain validation result, whereas the approximately capacity-matched rank-4 hypernetwork gave the best external macro result. The selected FiLM checkpoint also depended strongly on the condition: its validation macro SRCC was 0.8417 with correct labels, 0.8081 with zeroed labels, 0.7942 with deliberately wrong labels, and 0.7821 with shuffled labels. Thus the head learned to use the supplied group, although the oracle-label benefit was not equally transferable across fusion rules and datasets.
+Input FiLM gave the best in-domain validation result, whereas the approximately capacity-matched rank-4 hypernetwork gave the best external macro result. Table~\ref{tab:label-interventions} compares both models at the checkpoints selected by in-domain validation and shows that each depends on the supplied condition.
 
-\begin{figure}[htbp]
+\begin{table}[htbp]
 \centering
-\includegraphics[width=\textwidth]{plots/png/dataset_label_tradeoff.png}
-\caption{Dataset-label-conditioning speed--accuracy trade-off. Point area represents total parameters, colour represents peak GPU memory, and the dashed line is the FPS--external-SRCC Pareto front.}
-\label{fig:label-tradeoff}
-\end{figure}
+\small
+\setlength{\tabcolsep}{6pt}
+\resizebox{\textwidth}{!}{%
+\begin{tabular}{lcccc}
+\hline
+Fusion method & Correct labels & Zero labels & Wrong labels & Shuffled labels \\
+\hline
+Input FiLM & \textbf{0.8417} & 0.8081 & 0.7942 & 0.7821 \\
+Rank-4 hypernetwork & \textbf{0.8264} & 0.8151 & 0.8022 & 0.7893 \\
+\hline
+\end{tabular}
+}
+\caption{Validation macro SRCC under label interventions at each method's best in-domain validation checkpoint. Bold values denote the intended correct-label input within each row.}
+\label{tab:label-interventions}
+\end{table}
+
+For FiLM, replacing correct labels with zero, wrong, or shuffled labels reduces SRCC by 0.0336, 0.0475, and 0.0596, respectively. The corresponding hypernetwork reductions are 0.0113, 0.0242, and 0.0371. The ordered deterioration from correct to zero, wrong, and shuffled conditions confirms that both heads use group identity rather than merely benefiting from added capacity. The hypernetwork is less sensitive to label corruption than FiLM yet transfers better to the external datasets. A plausible explanation is that its rank constraint limits condition-specific changes to the scoring weights: it can specialize the quality mapping for a distortion group without freely rescaling and shifting the entire visual representation, which may preserve more of CLIP's transferable structure. This interpretation is consistent with the results but is not a causal guarantee.
 
 The dataset-mixture residual gate and rank-4 hypernetwork define the high-accuracy part of the Pareto front. The residual gate is faster, reaching external SRCC 0.6314 at 529.77 images/s and 1.761 ms median latency, while the hypernetwork raises SRCC to 0.6380 at 353.22 images/s and 3.244 ms. All mixture label heads remain close to 86M total parameters and about 35.13 GFLOPs; their peak memory lies between 660.8 and 679.7 MB. Hidden FiLM is the fastest mixture variant at 558.61 images/s but gives up 0.0274 SRCC relative to the hypernetwork. The result therefore offers two practical choices: the residual gate for maximum throughput and the hypernetwork for the strongest external correlation under almost the same model-size budget.
 
@@ -440,15 +446,15 @@ Table~\ref{tab:classifier-labels} compares predicted labels with both an oracle-
 \small
 \setlength{\tabcolsep}{5pt}
 \resizebox{\textwidth}{!}{%
-\begin{tabular}{lcccc}
+\begin{tabular}{lccccccc}
 \hline
-Condition source & KADID SRCC & KADID PLCC & External SRCC & External PLCC \\
+Condition source & KADID SRCC & KADID PLCC & External SRCC & External PLCC & FPS & p50 ms & Peak MB \\
 \hline
-Zero condition & 0.7828 & 0.7768 & 0.4981 & 0.5059 \\
-Ground-truth hard label & \textbf{0.7867} & \textbf{0.7814} & \textbf{0.5025} & \textbf{0.5101} \\
-Frozen classifier, hard label & 0.7718 & 0.7586 & 0.4753 & 0.4743 \\
-Frozen classifier, soft probabilities & 0.7679 & 0.7536 & 0.4775 & 0.4760 \\
-Joint classifier, soft probabilities & 0.7690 & 0.7477 & 0.4731 & 0.4618 \\
+Zero condition & 0.7828 & 0.7768 & 0.4981 & 0.5059 & 109.57 & 4.6 & 346.6 \\
+Ground-truth hard label & \textbf{0.7867} & \textbf{0.7814} & \textbf{0.5025} & \textbf{0.5101} & 110.15 & 5.2 & 346.6 \\
+Frozen classifier, hard label & 0.7718 & 0.7586 & 0.4753 & 0.4743 & 101.09 & 4.6 & 407.2 \\
+Frozen classifier, soft probabilities & 0.7679 & 0.7536 & 0.4775 & 0.4760 & 79.55 & 4.0 & 407.2 \\
+Joint classifier, soft probabilities & 0.7690 & 0.7477 & 0.4731 & 0.4618 & 111.20 & 4.0 & 407.2 \\
 \hline
 \end{tabular}
 }
@@ -465,15 +471,15 @@ The classifier's intermediate representation retains more information than an ei
 \small
 \setlength{\tabcolsep}{4pt}
 \resizebox{\textwidth}{!}{%
-\begin{tabular}{lccccc}
+\begin{tabular}{lcccccccc}
 \hline
-Condition & KADID SRCC & KADID PLCC & External SRCC & External PLCC & Total parameters \\
+Condition & KADID SRCC & KADID PLCC & External SRCC & External PLCC & Total parameters & FPS & p50 ms & Peak MB \\
 \hline
-Capacity-matched image-only control & 0.7632 & 0.7703 & 0.4873 & 0.5061 & 97.27M \\
-Layer 3, projected to 32 dimensions & 0.8062 & 0.7992 & \textbf{0.5200} & 0.5184 & 97.26M \\
-Layer 4, projected to 32 dimensions & 0.8428 & 0.8533 & 0.4907 & 0.5155 & 97.27M \\
-Layer 3, layer-normalized & 0.8314 & 0.8230 & 0.5081 & 0.5212 & 97.31M \\
-Layer 4, layer-normalized & \textbf{0.8906} & \textbf{0.8968} & 0.5068 & \textbf{0.5315} & 97.38M \\
+Capacity-matched image-only control & 0.7632 & 0.7703 & 0.4873 & 0.5061 & 97.27M & 198.57 & 3.6 & 389.6 \\
+Layer 3, projected to 32 dimensions & 0.8062 & 0.7992 & \textbf{0.5200} & 0.5184 & 97.26M & 74.44 & 4.6 & 407.5 \\
+Layer 4, projected to 32 dimensions & 0.8428 & 0.8533 & 0.4907 & 0.5155 & 97.27M & 69.27 & 4.9 & 407.6 \\
+Layer 3, layer-normalized & 0.8314 & 0.8230 & 0.5081 & 0.5212 & 97.31M & 81.28 & 5.4 & 407.7 \\
+Layer 4, layer-normalized & \textbf{0.8906} & \textbf{0.8968} & 0.5068 & \textbf{0.5315} & 97.38M & 81.42 & 4.8 & 408.7 \\
 \hline
 \end{tabular}
 }
@@ -512,14 +518,7 @@ Standalone ARNIQA regressor & \textbf{0.9270} & \textbf{0.9305} & 0.5859 & 0.592
 
 ARNIQA features improved both CLIP backbones: KADID-10k SRCC increased by 0.1342 for CLIP-Base and 0.0513 for CLIP-Large, while external macro SRCC increased by 0.1116 and 0.0534, respectively. The inference interventions show that the auxiliary representation was actively used. For CLIP-Base, shuffling ARNIQA features among validation images reduced SRCC from 0.8890 to 0.6019 and zeroing them reduced it to 0.7524; for CLIP-Large, the corresponding values were 0.9191, 0.6943, and 0.8503. The standalone ARNIQA regressor remained strongest on KADID-10k, but CLIP-Base with ARNIQA conditioning gave the highest external macro correlation in this comparison. These results suggest that continuous distortion-aware features are much more informative than a hard group identity, although much of the gain comes with the cost and prior knowledge of an additional IQA encoder.
 
-\begin{figure}[htbp]
-\centering
-\includegraphics[width=\textwidth]{plots/png/classifier_conditioning_tradeoff.png}
-\caption{Classifier- and ARNIQA-conditioning speed--accuracy trade-off. Point area represents total parameters, colour represents peak GPU memory, and the dashed line is the FPS--external-SRCC Pareto front.}
-\label{fig:classifier-tradeoff}
-\end{figure}
-
-The efficiency measurements make the cost of continuous ARNIQA features explicit. CLIP-Base with ARNIQA improves external SRCC from 0.4861 to 0.5977, but throughput falls from 335.65 to 26.86 images/s, median latency rises from 3.4 to 37.053 ms, and peak memory rises from 347.9 to 1445.8 MB. CLIP-Large with ARNIQA is slower and uses 2455.2 MB while also transferring less well than the CLIP-Base combination. Standalone ARNIQA is Pareto-efficient in this group because it retains external SRCC 0.5859 with only 23.51M parameters, although its ten-crop pipeline still limits throughput to 35.28 images/s. ARNIQA conditioning is therefore most appropriate when accuracy is worth substantially higher inference cost, not for the high-throughput operating point.
+The efficiency measurements make the cost of continuous ARNIQA features explicit. CLIP-Base with ARNIQA improves external SRCC from 0.4861 to 0.5977, but throughput falls from 335.65 to 26.86 images/s, median latency rises from 3.4 to 37.053 ms, and peak memory rises from 347.9 to 1445.8 MB. CLIP-Large with ARNIQA is slower and uses 2455.2 MB while also transferring less well than the CLIP-Base combination. Standalone ARNIQA retains external SRCC 0.5859 with only 23.51M parameters, although its ten-crop pipeline still limits throughput to 35.28 images/s. ARNIQA conditioning is therefore most appropriate when accuracy is worth substantially higher inference cost, not for the high-throughput operating point.
 
 \section{Comparison Across Experiment Groups}
 
